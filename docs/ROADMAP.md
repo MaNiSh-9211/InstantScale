@@ -90,8 +90,12 @@ Goal: migrate a real, stateful process with proof of continuity.
 - [x] Full matrix green: Phase 1 prototype, Phase 2 demo+hammer,
       Phase 3 battery, **fan-out spike ×10 replicas**
 - [x] Badge + topics on repo; runs on every push/PR
-- [ ] CRIU probe: package absent from runner apt pockets — next step build
-      CRIU from source in CI, then wire `--lazy-pages` end-to-end here
+- [x] **CRIU probe SOLVED**: criu-native job builds CRIU v4.1 from source
+      (`setcap cap_checkpoint_restore`, yama ptrace_scope=0, `--unprivileged`)
+      and passes: sleep dump/restore roundtrip **+ demo_app migration with
+      heartbeat-seq continuity verified in CI**
+- [ ] CRIU `--lazy-pages` roundtrip: experiment wired, not yet passing
+      (continue-on-error); debug lres.log/ldump.log next session
 
 ## Phase 5 — Productization
 - [ ] Container runtime integrations (runc shim, containerd snapshotter)
