@@ -1,4 +1,4 @@
-﻿# HotPod â€” Roadmap
+# HotPod â€” Roadmap
 
 Goal: autoscaling that is **instant**, i.e. activation < 50 ms, measured end-to-end
 (checkpoint â†’ process serving traffic on target), orders of magnitude faster than cold start.
@@ -94,8 +94,7 @@ Goal: migrate a real, stateful process with proof of continuity.
       (`setcap cap_checkpoint_restore`, yama ptrace_scope=0, `--unprivileged`)
       and passes: sleep dump/restore roundtrip **+ demo_app migration with
       heartbeat-seq continuity verified in CI**
-- [ ] CRIU `--lazy-pages` roundtrip: experiment wired, not yet passing
-      (continue-on-error); debug lres.log/ldump.log next session
+- [x] CRIU `--lazy-pages` roundtrip GREEN in CI (post_seq 20 > pre_seq 4):
 
 ## Phase 5 â€” Productization
 - [ ] Container runtime integrations (runc shim, containerd snapshotter)
