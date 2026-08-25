@@ -62,8 +62,10 @@ enum {
     IS_REQ_META  = 1,      /* client asks for region metadata            */
     IS_REQ_PAGES = 2,      /* client asks for `count` pages by offset    */
     IS_REQ_BYE   = 3,      /* graceful close                             */
+    IS_REQ_AUTH  = 4,      /* PSK challenge: 8B nonce + 32B HMAC         */
     IS_RSP_META  = 101,
     IS_RSP_PAGES = 102,
+    IS_RSP_AUTH  = 103,    /* server proof: 8B nonce + 32B HMAC          */
 };
 
 /* Status codes carried per page in PAGES_RESP. */
@@ -291,6 +293,279 @@ static inline void is_recv_exact(int fd, void *buf, size_t len)
         p += n;
         len -= (size_t)n;
     }
+}
+
+/* Same, but EOF is reported as 0 instead of dying — lets auth distinguish
+ * "server said no" from transport faults. */
+static inline size_t is_recv_exact_or_eof(int fd, void *buf, size_t len)
+{
+    size_t got = 0;
+    uint8_t *p = buf;
+    while (len) {
+        ssize_t n = recv(fd, p, len, 0);
+        if (n == 0)
+            return got;
+        if (n == -1) {
+            if (errno == EINTR)
+                continue;
+            is_die("wire", "recv", errno);
+        }
+        p += n; got += (size_t)n; len -= (size_t)n;
+    }
+    return got;
+}
+
+/* ------------------------------------------------------------------ */
+/* SHA-256 + HMAC (FIPS 180-4 / RFC 2104) — dependency-free, used for  */
+/* production PSK authentication of migration sessions.                */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    uint32_t h[8];
+    uint64_t total_len;
+    uint8_t  buf[64];
+    size_t   buflen;
+} is_sha256;
+
+static const uint32_t IS_K256[64] = {
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,
+    0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,
+    0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,
+    0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,
+    0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,
+    0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,
+    0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,
+    0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,
+    0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+};
+
+static inline uint32_t is_ror(uint32_t x, int n)
+{
+    return (x >> n) | (x << (32 - n));
+}
+
+static inline void is_sha256_init(is_sha256 *s)
+{
+    static const uint32_t iv[8] = {
+        0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,
+        0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19
+    };
+    memcpy(s->h, iv, sizeof(iv));
+    s->total_len = 0;
+    s->buflen = 0;
+}
+
+static inline void is_sha256_block(is_sha256 *s, const uint8_t p[64])
+{
+    uint32_t w[64], a, b, c, d, e, f, g, h, t1, t2;
+    for (int i = 0; i < 16; ++i)
+        w[i] = ((uint32_t)p[i*4] << 24) | ((uint32_t)p[i*4+1] << 16) |
+               ((uint32_t)p[i*4+2] << 8) | (uint32_t)p[i*4+3];
+    for (int i = 16; i < 64; ++i) {
+        uint32_t s0 = is_ror(w[i-15],7) ^ is_ror(w[i-15],18) ^ (w[i-15] >> 3);
+        uint32_t s1 = is_ror(w[i-2],17) ^ is_ror(w[i-2],19) ^ (w[i-2] >> 10);
+        w[i] = w[i-16] + s0 + w[i-7] + s1;
+    }
+    a=s->h[0]; b=s->h[1]; c=s->h[2]; d=s->h[3];
+    e=s->h[4]; f=s->h[5]; g=s->h[6]; h=s->h[7];
+    for (int i = 0; i < 64; ++i) {
+        uint32_t S1 = is_ror(e,6) ^ is_ror(e,11) ^ is_ror(e,25);
+        uint32_t ch = (e & f) ^ (~e & g);
+        t1 = h + S1 + ch + IS_K256[i] + w[i];
+        uint32_t S0 = is_ror(a,2) ^ is_ror(a,13) ^ is_ror(a,22);
+        uint32_t mj = (a & b) ^ (a & c) ^ (b & c);
+        t2 = S0 + mj;
+        h=g; g=f; f=e; e=d+t1; d=c; c=b; b=a; a=t1+t2;
+    }
+    s->h[0]+=a; s->h[1]+=b; s->h[2]+=c; s->h[3]+=d;
+    s->h[4]+=e; s->h[5]+=f; s->h[6]+=g; s->h[7]+=h;
+}
+
+static inline void is_sha256_update(is_sha256 *s, const void *data, size_t len)
+{
+    const uint8_t *p = data;
+    s->total_len += len;
+    while (len) {
+        size_t take = 64 - s->buflen;
+        if (take > len) take = len;
+        memcpy(s->buf + s->buflen, p, take);
+        s->buflen += take; p += take; len -= take;
+        if (s->buflen == 64) {
+            is_sha256_block(s, s->buf);
+            s->buflen = 0;
+        }
+    }
+}
+
+static inline void is_sha256_final(is_sha256 *s, uint8_t out[32])
+{
+    uint64_t bits = s->total_len * 8;
+    uint8_t pad = 0x80;
+    is_sha256_update(s, &pad, 1);
+    uint8_t zero = 0;
+    while (s->buflen != 56)
+        is_sha256_update(s, &zero, 1);
+    uint8_t lenb[8];
+    for (int i = 0; i < 8; ++i)
+        lenb[i] = (uint8_t)(bits >> (56 - i * 8));
+    memcpy(s->buf + 56, lenb, 8);
+    is_sha256_block(s, s->buf);
+    for (int i = 0; i < 8; ++i) {
+        out[i*4]   = (uint8_t)(s->h[i] >> 24);
+        out[i*4+1] = (uint8_t)(s->h[i] >> 16);
+        out[i*4+2] = (uint8_t)(s->h[i] >> 8);
+        out[i*4+3] = (uint8_t)(s->h[i]);
+    }
+}
+
+/* HMAC-SHA256(key, msg) -> 32B tag */
+static inline void is_hmac_sha256(const uint8_t *key, size_t keylen,
+                                  const uint8_t *msg, size_t msglen,
+                                  uint8_t out[32])
+{
+    uint8_t k[64], ipad[64], opad[64], khash[32], inner[32];
+    memset(k, 0, sizeof(k));
+    if (keylen > 64) {
+        is_sha256 s; is_sha256_init(&s);
+        is_sha256_update(&s, key, keylen);
+        is_sha256_final(&s, khash);
+        memcpy(k, khash, 32);
+    } else {
+        memcpy(k, key, keylen);
+    }
+    for (int i = 0; i < 64; ++i) {
+        ipad[i] = k[i] ^ 0x36;
+        opad[i] = k[i] ^ 0x5c;
+    }
+    is_sha256 s; is_sha256_init(&s);
+    is_sha256_update(&s, ipad, 64);
+    is_sha256_update(&s, msg, msglen);
+    is_sha256_final(&s, inner);
+    is_sha256_init(&s);
+    is_sha256_update(&s, opad, 64);
+    is_sha256_update(&s, inner, 32);
+    is_sha256_final(&s, out);
+}
+
+/* Constant-time tag comparison (never leaks match position). */
+static inline int is_ct_memcmp(const uint8_t *a, const uint8_t *b, size_t n)
+{
+    volatile uint8_t d = 0;
+    for (size_t i = 0; i < n; ++i)
+        d |= a[i] ^ b[i];
+    return d != 0;
+}
+
+/* Random 8B nonce from the OS; falls back to clock entropy in sandboxes. */
+static inline uint64_t is_rand64(void)
+{
+    uint64_t v = 0;
+    int fd = open("/dev/urandom", O_RDONLY);
+    if (fd != -1) {
+        if (read(fd, &v, sizeof(v)) != (ssize_t)sizeof(v))
+            v = 0;
+        close(fd);
+    }
+    if (v == 0) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        v = ((uint64_t)ts.tv_nsec << 17) ^ (uint64_t)ts.tv_sec ^ 0xD1B54A32D192ED03ull;
+    }
+    return v;
+}
+
+/* Read first line of a token file (trimmed). Returns malloc'd string. */
+static inline char *is_read_token_file(const char *path)
+{
+    int fd = open(path, O_RDONLY);
+    if (fd == -1)
+        return NULL;
+    char buf[256];
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0)
+        return NULL;
+    buf[n] = '\0';
+    char *nl = strpbrk(buf, "\r\n");
+    if (nl)
+        *nl = '\0';
+    if (!buf[0])
+        return NULL;
+    char *out = malloc(strlen(buf) + 1);
+    if (out)
+        strcpy(out, buf);
+    return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* PSK session auth (challenge-response, both directions)              */
+/*   client -> AUTH: nonce_c(8) || HMAC(token, nonce_c || "C")         */
+/*   server -> AUTH: nonce_s(8) || HMAC(token, nonce_s || "S")         */
+/* A server configured with a token drops any pre-AUTH frame; a client */
+/* with a token must auth before META. Mismatch = instant drop.        */
+/* ------------------------------------------------------------------ */
+
+#define IS_AUTH_NONCE 8
+#define IS_AUTH_TAGLEN 32
+#define IS_AUTH_PAYLOAD (IS_AUTH_NONCE + IS_AUTH_TAGLEN)
+
+static inline void is_auth_hmac(const char *token, uint64_t nonce,
+                                const char *role, uint8_t tag[32])
+{
+    uint8_t msg[IS_AUTH_NONCE + 1];
+    for (int i = 0; i < IS_AUTH_NONCE; ++i)
+        msg[i] = (uint8_t)(nonce >> (8 * i));
+    msg[IS_AUTH_NONCE] = (uint8_t)role[0];
+    is_hmac_sha256((const uint8_t *)token, strlen(token),
+                   msg, sizeof(msg), tag);
+}
+
+/* Client side: perform the exchange on a blocking socket. Fatal on any
+ * mismatch — a wrong token must never silently proceed. */
+static inline void is_client_auth(int fd, const char *token)
+{
+    uint64_t nc = is_rand64();
+    uint8_t tag[32];
+    is_auth_hmac(token, nc, "C", tag);
+
+    is_wire_hdr h = { .magic = IS_WIRE_MAGIC, .type = IS_REQ_AUTH,
+                      .count = 0 };
+    uint8_t frame[sizeof(h) + IS_AUTH_PAYLOAD];
+    memcpy(frame, &h, sizeof(h));
+    memcpy(frame + sizeof(h), &nc, IS_AUTH_NONCE);
+    memcpy(frame + sizeof(h) + IS_AUTH_NONCE, tag, IS_AUTH_TAGLEN);
+    is_send_exact(fd, frame, sizeof(frame));
+
+    uint8_t rh[sizeof(is_wire_hdr)];
+    is_recv_exact(fd, rh, sizeof(rh));
+    memcpy(&h, rh, sizeof(h));
+    if (h.magic != IS_WIRE_MAGIC || h.type != IS_RSP_AUTH)
+        is_die("auth", "server rejected token (bad AUTH response)", EACCES);
+
+    /* Rejection = header-only frame then close. */
+    uint8_t rs[IS_AUTH_NONCE + IS_AUTH_TAGLEN];
+    if (is_recv_exact_or_eof(fd, rs, sizeof(rs)) != sizeof(rs))
+        is_die("auth", "token rejected by pageserver", EACCES);
+
+    uint64_t ns;
+    memcpy(&ns, rs, IS_AUTH_NONCE);
+    uint8_t expect[32];
+    is_auth_hmac(token, ns, "S", expect);
+    if (is_ct_memcmp(expect, rs + IS_AUTH_NONCE, 32) != 0)
+        is_die("auth", "server proof mismatch", EACCES);
+}
+
+/* Server side: verify one AUTH frame payload. 0 = ok, EACCES = reject. */
+static inline int is_server_verify_auth(const char *token,
+                                        const uint8_t *payload)
+{
+    uint64_t nc;
+    memcpy(&nc, payload, IS_AUTH_NONCE);
+    uint8_t expect[32];
+    is_auth_hmac(token, nc, "C", expect);
+    return is_ct_memcmp(expect, payload + IS_AUTH_NONCE, 32) ? EACCES : 0;
 }
 
 #endif /* IS_COMMON_H */

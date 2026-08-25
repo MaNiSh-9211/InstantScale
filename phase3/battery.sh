@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # Phase 3 full validation battery (dev/CI entry point)
 set -u
 cd "$(dirname "$0")"

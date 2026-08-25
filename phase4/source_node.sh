@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # HotPod Phase 4 â€” SOURCE NODE (runs inside the "Host A" container)
 #
 # Lifecycle:

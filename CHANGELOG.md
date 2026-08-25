@@ -1,8 +1,27 @@
-﻿# Changelog
+# Changelog
 
 All notable changes. Reverse chronological.
 ADRs referenced as `docs/decisions/NNNN-*.md`.
 
+## [0.5.0] - 2026-08-25 - production hardening
+
+### Added
+- PSK + HMAC-SHA256 session auth on the wire (challenge-response, both
+  directions, constant-time compare, replay guard, in-tree crypto)
+  (ADR-0011). Server refuses all pre-AUTH traffic when a token is set;
+  tokenless clients get actionable rejection messages.
+- Pageserver production hardening: SIGTERM/SIGINT graceful stop with
+  stats summary (exit 0), 10-min idle connection reaping, 256-client cap.
+- deploy/ package: multi-stage production Dockerfile, Kubernetes manifests
+  (Deployment + Service + migration Job + Secret wiring), systemd unit.
+- docs/PRODUCTION.md operator runbook (prereqs, secrets, checkpoints,
+  activation, monitoring, failure playbook, security model, limits).
+- auth_test.sh security suite (8 checks) wired into CI; production image
+  build job added to CI.
+
+### Changed
+- Client auth errors are actionable: 	oken rejected by pageserver,
+  pageserver requires a token (set HOTPOD_TOKEN or --token-file).
 ## [0.4.1] - 2026-08-25 - renamed to HotPod
 
 ### Changed

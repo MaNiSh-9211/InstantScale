@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -e
+cd "$(dirname "$0")"
+git add -A
+git commit -m "prod: PSK/HMAC wire auth, pageserver hardening, deploy package, runbook
+
+- common.h: in-tree SHA-256/HMAC; challenge-response session auth (ADR-0011)
+- pageserver: --token-file/HOTPOD_TOKEN gate, replay guard, clean rejection
+  marker, SIGTERM stats, idle reaping (10min), 256-client cap
+- clients (restorer, demo_app lazy): token auth before META; actionable
+  rejection messages
+- deploy/: multi-stage prod Dockerfile, k8s Deployment/Service/Job/Secret,
+  systemd unit
+- docs/PRODUCTION.md operator runbook; auth_test.sh (8 checks) + prod image
+  build wired into CI
+- changelog 0.5.0"
+git push
+git log --oneline -1

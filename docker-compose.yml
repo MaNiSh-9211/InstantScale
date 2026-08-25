@@ -22,6 +22,7 @@ services:
       INIT_MS: "1200"
       HEAP_MB: "32"
       PORT: "46100"
+      HOTPOD_TOKEN: "${HOTPOD_TOKEN:-dev-only-change-me}"
     command: bash /src/phase4/source_node.sh
 
   target:
@@ -32,6 +33,8 @@ services:
       - .:/src
     working_dir: /src
     depends_on: [source]        # target_node.sh polls for the checkpoint file
+    environment:
+      HOTPOD_TOKEN: "${HOTPOD_TOKEN:-dev-only-change-me}"
     command: bash /src/phase4/target_node.sh source 46100 lazy
 
 networks:

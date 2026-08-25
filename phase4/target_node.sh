@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # HotPod Phase 4 â€” TARGET NODE (runs inside the "Host B" container)
 #
 # Activates a lazily-restored instance whose pages live on Host A, across the
@@ -49,4 +49,5 @@ ACT=$(awk 'match($0,/activated_in=[0-9.]+/){print substr($0,RSTART+13,RLENGTH-13
 HBS=$(grep -c '^HB ' "$HB" || true)
 FIN=$(grep '^FINAL' "$HB" || echo "FINAL MISSING")
 
+cp "$HB" /src/artifacts/target_hb.log 2>/dev/null || true
 echo "RESULT mode=$MODE activation_ms=${ACT:-NA} pre_seq=$PRE post_seq=$POST heartbeats=$HBS $FIN"

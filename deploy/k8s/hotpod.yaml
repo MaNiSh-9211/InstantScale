@@ -1,0 +1,86 @@
+# HotPod on Kubernetes — pageserver + lazy-resume migration Job
+# Apply order:
+#   kubectl create namespace hotpod
+#   kubectl -n hotpod create secret generic hotpod-token \
+#       --from-literal=HOTPOD_TOKEN="$(openssl rand -hex 32)"
+#   kubectl apply -f 20-pageserver.yaml
+#   kubectl apply -f 30-migration-job.yaml
+#
+# NOTE: userfaultfd needs either privileged pods (below) or nodes with
+#   sysctl vm.unprivileged_userfaultfd=1 (set via DaemonSet / node image).
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hotpod-pageserver
+  namespace: hotpod
+  labels: { app: hotpod-pageserver }
+spec:
+  replicas: 1                     # one per checkpoint being served;
+  selector:                       # scale by adding Deployments per image
+    matchLabels: { app: hotpod-pageserver }
+  template:
+    metadata:
+      labels: { app: hotpod-pageserver }
+    spec:
+      # userfaultfd syscall is blocked by default seccomp profiles
+      securityContext: { privileged: true }
+      containers:
+        - name: pageserver
+          image: ghcr.io/manish-9211/hotpod:latest
+          args: ["pageserver", "--port", "46100",
+                 "--image", "/data/app.isim"]
+          env:
+            - name: HOTPOD_TOKEN
+              valueFrom:
+                secretKeyRef: { name: hotpod-token, key: HOTPOD_TOKEN }
+          ports: [{ containerPort: 46100 }]
+          volumeMounts: [{ name: checkpoint, mountPath: /data }]
+          readinessProbe:
+            tcpSocket: { port: 46100 }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests: { cpu: "500m", memory: "256Mi" }
+            limits:   { cpu: "2",    memory: "1Gi"   }
+      volumes:
+        - name: checkpoint
+          hostPath: { path: /var/lib/hotpod, type: DirectoryOrCreate }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hotpod-pageserver
+  namespace: hotpod
+spec:
+  selector: { app: hotpod-pageserver }
+  ports: [{ port: 46100, targetPort: 46100 }]
+---
+# Example consumer: a Job whose pod resumes the checkpoint lazily and
+# verifies integrity. Swap the command for your real workload image that
+# links the puller (see docs/ARCHITECTURE.md).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hotpod-lazy-resume
+  namespace: hotpod
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      securityContext: { privileged: true }
+      restartPolicy: Never
+      containers:
+        - name: resume
+          image: ghcr.io/manish-9211/hotpod:latest
+          command: ["/usr/local/bin/demo_app",
+                    "--resume-lazy-img", "/data/app.isim",
+                    "--host", "hotpod-pageserver", "--port", "46100"]
+          env:
+            - name: HOTPOD_TOKEN
+              valueFrom:
+                secretKeyRef: { name: hotpod-token, key: HOTPOD_TOKEN }
+          volumeMounts: [{ name: checkpoint, mountPath: /data, readOnly: true }]
+      volumes:
+        - name: checkpoint
+          hostPath: { path: /var/lib/hotpod, type: DirectoryOrCreate }

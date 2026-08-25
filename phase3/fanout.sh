@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # HotPod â€” FAN-OUT autoscaling demo
 #
 # THE SPIKE SCENARIO: traffic doubles, the autoscaler needs 10 more warm

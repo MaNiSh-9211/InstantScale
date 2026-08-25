@@ -46,6 +46,12 @@ jobs:
           cd phase3
           WARM_MB=16 INIT_MS=800 bash fanout.sh 10
 
+      - name: "Auth suite (PSK accept/reject, graceful shutdown)"
+        run: bash phase2/auth_test.sh
+
+      - name: "Production image build"
+        run: docker build -f deploy/Dockerfile -t hotpod:${{ github.sha }} .
+
       - name: "CRIU availability probe (native kernel)"
         run: |
           if ! command -v criu >/dev/null; then

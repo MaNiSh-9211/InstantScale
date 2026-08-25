@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # HotPod Phase 3 orchestrator â€” the autoscaling story, end to end:
 #
 #   cold   : fresh process incl. simulated runtime bootstrap (--init-ms)

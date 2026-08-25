@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # HotPod Phase 2 demo â€” the whole pitch in ~10 seconds:
 #   1. seed a deterministic "warm heap" checkpoint (like a CRIU image)
 #   2. start the page server (source host holding the memory)

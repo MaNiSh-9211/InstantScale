@@ -202,6 +202,18 @@ int main(int argc, char **argv)
             int sock = is_tcp_connect(
                 host ? host : "127.0.0.1",
                 (uint16_t)arg_ul(argc, argv, "--port", IS_DEFAULT_PORT));
+
+            /* PSK auth before anything else flows on this socket. */
+            const char *tok = getenv("HOTPOD_TOKEN");
+            const char *tokfile = arg_str(argc, argv, "--token-file");
+            if (tokfile) {
+                tok = is_read_token_file(tokfile);
+                if (!tok)
+                    is_die("resume-lazy", "read token file", errno);
+            }
+            if (tok)
+                is_client_auth(sock, tok);
+
             is_set_nonblock(sock);
             pp.uffd = uffd;
             pp.sock = sock;

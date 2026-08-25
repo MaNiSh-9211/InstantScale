@@ -15,7 +15,8 @@
 param(
     [int]$HeapMB = 32,
     [int]$InitMs = 1200,
-    [ValidateSet("lazy","eager","both")][string]$Mode = "lazy"
+    [ValidateSet("lazy","eager","both")][string]$Mode = "lazy",
+    [string]$Token = ""
 )
 
 $ErrorActionPreference = "Continue"
@@ -76,6 +77,7 @@ $srcArgs = @(
     "-e", ("INIT_MS=" + $InitMs),
     "-e", ("HEAP_MB=" + $HeapMB),
     "-e", ("PORT=" + $port),
+    "-e", ("HOTPOD_TOKEN=" + $Token),
     $img, "bash", "/src/phase4/source_node.sh"
 )
 docker @srcArgs | Out-Null

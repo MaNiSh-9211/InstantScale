@@ -615,15 +615,39 @@ int main(int argc, char **argv)
 
     /* ---- handshake: the ONLY thing standing between nothing and RUNNING */
     int sock = is_tcp_connect(host, port);
+
+    const char *tok = getenv("HOTPOD_TOKEN");
+    const char *tokfile = NULL;
+    for (int i = 1; i + 1 < argc; ++i)
+        if (!strcmp(argv[i], "--token-file"))
+            tokfile = argv[i + 1];
+    if (tokfile) {
+        tok = is_read_token_file(tokfile);
+        if (!tok)
+            is_die("restorer", "read token file", errno);
+    }
+    if (tok)
+        is_client_auth(sock, tok); /* fatal on mismatch — never proceed */
+
     is_wire_hdr q = { .magic = IS_WIRE_MAGIC, .type = IS_REQ_META, .count = 0 };
     is_send_exact(sock, &q, sizeof(q));
 
-    uint8_t rh[sizeof(is_wire_hdr)], rm[sizeof(is_wire_meta)];
-    is_recv_exact(sock, rh, sizeof(rh));
+    /* A tokenless client talking to a PSK server gets the AUTH-rejection
+     * marker instead of META — translate it into an actionable error. */
+    uint8_t rh0[sizeof(is_wire_hdr)];
+    is_recv_exact(sock, rh0, sizeof(rh0));
     is_wire_hdr h;
-    memcpy(&h, rh, sizeof(h));
-    if (h.magic != IS_WIRE_MAGIC || h.type != IS_RSP_META)
-        is_die("restorer", "bad META response", EPROTO);
+    memcpy(&h, rh0, sizeof(h));
+    if (h.magic != IS_WIRE_MAGIC)
+        is_die("restorer", "bad frame magic from pageserver", EPROTO);
+    if (h.type == IS_RSP_AUTH)
+        is_die("restorer",
+               "pageserver requires a token (set HOTPOD_TOKEN or --token-file)",
+               EACCES);
+    if (h.type != IS_RSP_META)
+        is_die("restorer", "unexpected first response", EPROTO);
+
+    uint8_t rm[sizeof(is_wire_meta)];
     is_recv_exact(sock, rm, sizeof(rm));
     is_wire_meta meta;
     memcpy(&meta, rm, sizeof(meta));

@@ -19,15 +19,20 @@
 #include "common.h"
 
 /* Per-connection state --------------------------------------------------- */
-typedef struct {
+typedef struct conn_s {
     int      fd;
     bool     want_write;         /* EPOLLOUT currently armed?               */
+    bool     authed;             /* PSK exchange completed?                 */
+    double   last_active_ms;     /* idle reaping reference                  */
     uint8_t *rbuf;               /* accumulate raw request bytes            */
     size_t   rlen, rcap;
     uint8_t *sbuf;               /* pending response bytes                  */
     size_t   slen, scap, ssent;
-    bool     closing;            /* BYE seen â€” flush then drop              */
+    bool     closing;            /* BYE seen — flush then drop              */
+    struct conn_s *prev, *next;  /* registry for idle sweep + stats         */
 } conn_t;
+
+static conn_t *g_conns;              /* doubly-linked registry head           */
 
 static int    g_epfd;
 static void  *g_img;                 /* mmap of the whole .isim file          */
@@ -35,6 +40,20 @@ static size_t g_img_len;
 static const is_img_hdr *g_hdr;
 static const uint8_t *g_pages;       /* first page byte inside the map        */
 static uint64_t g_conns_served, g_pages_served, g_bytes_served;
+static char   *g_token;             /* PSK; NULL = open mode (dev only)      */
+static volatile sig_atomic_t g_stop = 0;
+static long    g_live_conns;
+static const long MAX_CLIENTS = 256;
+static const double IDLE_TIMEOUT_MS = 600000.0; /* 10 min */
+
+static void on_signal(int sig) { (void)sig; g_stop = 1; }
+
+static void print_stats(void)
+{
+    printf("[pageserver] stats: pages=%" PRIu64 " bytes=%" PRIu64
+           " conns_total=%" PRIu64 " live=%ld\n",
+           g_pages_served, g_bytes_served, g_conns_served, g_live_conns);
+}
 
 /* -- connection lifecycle ------------------------------------------------ */
 
@@ -42,9 +61,13 @@ static void conn_free(conn_t *c)
 {
     epoll_ctl(g_epfd, EPOLL_CTL_DEL, c->fd, NULL);
     close(c->fd);
+    if (c->prev) c->prev->next = c->next;
+    else         g_conns = c->next;
+    if (c->next) c->next->prev = c->prev;
     free(c->rbuf);
     free(c->sbuf);
     free(c);
+    --g_live_conns;
 }
 
 static void conn_arm(conn_t *c, bool out)
@@ -128,7 +151,19 @@ static void process_recv(conn_t *c)
         memcpy(&h, c->rbuf, sizeof(h)); /* alignment-safe */
         if (h.magic != IS_WIRE_MAGIC || h.count > IS_MAX_BATCH) {
             fprintf(stderr, "[pageserver] bad frame (magic/type/count)"
-                            " â€” dropping client\n");
+                            " — dropping client\n");
+            c->closing = true;
+            break;
+        }
+
+        /* PSK gate: with a token configured, the FIRST frame must be AUTH
+         * and everything else is rejected with the standard marker. */
+        if (g_token && !c->authed && h.type != IS_REQ_AUTH) {
+            fprintf(stderr, "[pageserver] unauthenticated frame (type %u)"
+                            " — rejecting\n", h.type);
+            is_wire_hdr rj = { .magic = IS_WIRE_MAGIC,
+                               .type = IS_RSP_AUTH, .count = 0 };
+            sbuf_put(c, &rj, sizeof(rj));
             c->closing = true;
             break;
         }
@@ -143,8 +178,11 @@ static void process_recv(conn_t *c)
             break;
         case IS_REQ_BYE:
             break;
+        case IS_REQ_AUTH:
+            need += IS_AUTH_PAYLOAD;
+            break;
         default:
-            fprintf(stderr, "[pageserver] unknown type %u â€” dropping\n",
+            fprintf(stderr, "[pageserver] unknown type %u — dropping\n",
                     h.type);
             c->closing = true;
             goto done;
@@ -154,6 +192,30 @@ static void process_recv(conn_t *c)
 
         uint8_t *body = c->rbuf + sizeof(h);
         switch (h.type) {
+        case IS_REQ_AUTH: {
+            if (c->authed) { c->closing = true; break; } /* replay guard */
+            if (g_token &&
+                is_server_verify_auth(g_token, body) == 0) {
+                c->authed = true;
+                uint64_t ns = is_rand64();
+                uint8_t tag[32];
+                is_auth_hmac(g_token, ns, "S", tag);
+                is_wire_hdr ah = { .magic = IS_WIRE_MAGIC,
+                                   .type = IS_RSP_AUTH, .count = 0 };
+                sbuf_put(c, &ah, sizeof(ah));
+                sbuf_put(c, &ns, IS_AUTH_NONCE);
+                sbuf_put(c, tag, IS_AUTH_TAGLEN);
+                printf("[pageserver] client authenticated\n");
+            } else {
+                /* Signal rejection cleanly so clients report "token
+                 * rejected" instead of a raw connection reset. */
+                is_wire_hdr rh = { .magic = IS_WIRE_MAGIC,
+                                   .type = IS_RSP_AUTH, .count = 0 };
+                sbuf_put(c, &rh, sizeof(rh));
+                c->closing = true;
+            }
+            break;
+        }
         case IS_REQ_META: {
             /* Build wire_meta explicitly â€” never slice the disk header,
              * its field order differs from the wire struct's. */
@@ -221,16 +283,27 @@ static bool flush_conn(conn_t *c)
 int main(int argc, char **argv)
 {
     signal(SIGPIPE, SIG_IGN); /* dead peers must not kill the daemon */
+    signal(SIGINT, on_signal);
+    signal(SIGTERM, on_signal);
     is_crc_init();
 
     uint16_t port = IS_DEFAULT_PORT;
     const char *img_path = NULL;
+    const char *token_file = NULL;
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--port") && i + 1 < argc)
             port = (uint16_t)strtoul(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--image") && i + 1 < argc)
             img_path = argv[++i];
+        else if (!strcmp(argv[i], "--token-file") && i + 1 < argc)
+            token_file = argv[++i];
     }
+    g_token = token_file ? is_read_token_file(token_file) : NULL;
+    if (!g_token)
+        g_token = getenv("HOTPOD_TOKEN") ? getenv("HOTPOD_TOKEN") : NULL;
+    if (!g_token)
+        fprintf(stderr, "[pageserver] WARNING: no HOTPOD_TOKEN — running in"
+                        " OPEN mode (development only)\n");
     if (!img_path) {
         fprintf(stderr, "usage: %s --image warm.isim [--port %u]\n",
                 argv[0], IS_DEFAULT_PORT);
@@ -260,14 +333,15 @@ int main(int argc, char **argv)
            "pageserver", g_hdr->svc_name, g_hdr->num_pages,
            (double)g_hdr->region_len / (1024.0 * 1024.0),
            (uint32_t)g_hdr->digest);
-    printf("[%-9s] listening on 0.0.0.0:%u\n", "pageserver", port);
+    printf("[%-9s] listening on 0.0.0.0:%u (auth=%s)\n",
+           "pageserver", port, g_token ? "PSK/HMAC" : "OPEN");
 
     g_epfd = epoll_create1(EPOLL_CLOEXEC);
     if (g_epfd == -1)
         is_die("pageserver", "epoll_create1", errno);
 
     int lfd = is_tcp_listen(port);
-    /* Tag the listener with a unique address â€” data.fd and data.ptr share a
+    /* Tag the listener with a unique address — data.fd and data.ptr share a
      * union, so testing ptr==NULL while storing fd would hand back the fd
      * bits reinterpreted as a pointer (instant segfault on first accept). */
     static char listener_tag;
@@ -275,12 +349,10 @@ int main(int argc, char **argv)
     if (epoll_ctl(g_epfd, EPOLL_CTL_ADD, lfd, &ev) == -1)
         is_die("pageserver", "epoll_ctl(ADD listen)", errno);
 
-    bool running = true;
-    (void)running;
-
-    for (;;) {
+    /* 1s tick: lets SIGTERM/SIGINT land and idle connections get reaped. */
+    for (; !g_stop;) {
         struct epoll_event out[32];
-        int n = epoll_wait(g_epfd, out, 32, -1);
+        int n = epoll_wait(g_epfd, out, 32, 1000);
         if (n == -1) {
             if (errno == EINTR)
                 continue;
@@ -298,16 +370,28 @@ int main(int argc, char **argv)
                             continue;
                         is_die("pageserver", "accept", errno);
                     }
+                    if (g_live_conns >= MAX_CLIENTS) {
+                        fprintf(stderr, "[pageserver] client cap %ld hit"
+                                " — rejecting connection\n", MAX_CLIENTS);
+                        close(cfd);
+                        continue;
+                    }
                     is_set_nonblock(cfd);
                     is_set_nodelay(cfd);
                     conn_t *c = calloc(1, sizeof(*c));
                     if (!c)
                         is_die("pageserver", "calloc(conn)", errno);
                     c->fd = cfd;
+                    c->last_active_ms = is_now_ms();
                     c->rcap = 64 * 1024;
                     c->rbuf = malloc(c->rcap);
                     if (!c->rbuf)
                         is_die("pageserver", "malloc(rbuf)", errno);
+                    c->prev = NULL;
+                    c->next = g_conns;
+                    if (g_conns) g_conns->prev = c;
+                    g_conns = c;
+                    ++g_live_conns;
                     struct epoll_event cev = { .events = EPOLLIN,
                                                .data.ptr = c };
                     if (epoll_ctl(g_epfd, EPOLL_CTL_ADD, cfd, &cev) == -1)
@@ -317,6 +401,7 @@ int main(int argc, char **argv)
             }
 
             conn_t *c = out[i].data.ptr;
+            c->last_active_ms = is_now_ms();
 
             if (out[i].events & (EPOLLHUP | EPOLLERR)) {
                 conn_free(c);
@@ -361,5 +446,21 @@ int main(int argc, char **argv)
             }
             (void)alive;
         }
+
+        /* Idle sweep: reap connections that produced nothing for 10 min. */
+        double now = is_now_ms();
+        for (conn_t *c = g_conns; c; ) {
+            conn_t *next = c->next;
+            if (now - c->last_active_ms > IDLE_TIMEOUT_MS) {
+                fprintf(stderr, "[pageserver] idle timeout — closing fd %d\n",
+                        c->fd);
+                conn_free(c);
+            }
+            c = next;
+        }
     }
+
+    print_stats();
+    close(lfd);
+    return 0;
 }
