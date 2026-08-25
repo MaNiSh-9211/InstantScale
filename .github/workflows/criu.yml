@@ -1,4 +1,4 @@
-name: criu-native
+﻿name: criu-native
 
 on:
   push:
@@ -91,10 +91,10 @@ jobs:
           PRE=$(awk '$1=="HB"{split($2,a,"=");s=a[2]}END{print s+0}' "$HB")
 
           mkdir -p /tmp/lps /tmp/ldump
-          sudo "$CR" page-server --images /tmp/lps --address 127.0.0.1 \
+          timeout 60 sudo "$CR" page-server --images /tmp/lps --address 127.0.0.1 \
                --port 46333 --daemon --pidfile /tmp/lps.pid \
                -o /tmp/lps.log -v1 || echo "[dbg] page-server rc=$?"
-          sudo "$CR" dump -D /tmp/ldump --lazy-pages \
+          timeout 180 sudo "$CR" dump -D /tmp/ldump --lazy-pages \
                --page-server --address 127.0.0.1 --port 46333 \
                -t $APP --shell-job                -o /tmp/ldump.log -v1 &
           DJ=$!
@@ -106,7 +106,7 @@ jobs:
               sleep 0.1
           done
 
-          sudo "$CR" restore --lazy-pages --page-server \
+          timeout 180 sudo "$CR" restore --lazy-pages --page-server \
                --address 127.0.0.1 --port 46333 --images /tmp/lps \
                --shell-job -d --pidfile /tmp/lr.pid \
                -o /tmp/lres.log -v1 || echo "[dbg] restore rc=$?"
