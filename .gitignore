@@ -1,0 +1,40 @@
+# ---- Local-only project material (never commit) ----
+INSTRUCTIONS.local.md
+*.local.md
+.private/
+
+# ---- Build artifacts ----
+target/
+build/
+bin/
+obj/
+*.o
+*.a
+*.so
+*.rlib
+
+# ---- Rust ----
+Cargo.lock
+
+# ---- Go ----
+vendor/
+*.test
+*.out
+
+# ---- IDE / OS ----
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ---- Compiled binaries (also produced inside dev containers) ----
+mvp/uffd_selffault
+phase2/seeder
+phase2/pageserver
+phase2/restorer
+
+# ---- Phase 4 runtime artifacts ----
+artifacts/
+phase3/demo_app
+phase3/analyze
