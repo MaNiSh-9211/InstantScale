@@ -70,7 +70,8 @@ jobs:
           criu restore --unprivileged -D /tmp/cimg --shell-job -d \
             --pidfile /tmp/r.pid -o /tmp/cres.log -v1
           sleep 0.8
-          POST=$(awk '$1=="HB"{split($2,a,"=");print a[2];exit}' "$HB")
+          # File accumulates across both processes: LAST seq = restored one.
+          POST=$(awk '$1=="HB"{split($2,a,"=");s=a[2]}END{print s+0}' "$HB")
           kill "$(cat /tmp/r.pid)" 2>/dev/null || true
 
           echo "pre_seq=$PRE post_seq=$POST"
