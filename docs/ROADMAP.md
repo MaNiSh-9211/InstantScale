@@ -86,6 +86,13 @@ Goal: migrate a real, stateful process with proof of continuity.
 - [ ] Kubernetes prototype: CRD `InstantScaleSession`, warm pool of
       checkpoints ("seed pods") per service class
 
+**CI (GitHub Actions, ubuntu-24.04 native kernel):**
+- [x] Full matrix green: Phase 1 prototype, Phase 2 demo+hammer,
+      Phase 3 battery, **fan-out spike ×10 replicas**
+- [x] Badge + topics on repo; runs on every push/PR
+- [ ] CRIU probe: package absent from runner apt pockets — next step build
+      CRIU from source in CI, then wire `--lazy-pages` end-to-end here
+
 ## Phase 5 — Productization
 - [ ] Container runtime integrations (runc shim, containerd snapshotter)
 - [ ] Dirty-page re-sync for repeated scale events (WP-mode uffd on source)
