@@ -9,11 +9,26 @@
 **HotPod makes autoscaling instant**: a pre-warmed Linux process is
 checkpointed, resumed on another host in **sub-millisecond time with 0 % of
 its heap present**, and its memory streams in on demand through
-`userfaultfd` while the process is already serving traffic. A 64 MB warm
-instance goes from checkpoint to `RUNNING` in **0.17â€“0.55 ms** â€” versus
-~0.7 s real cold start and ~26 ms eager full-copy â€” and the restored instance
-continues its own sequence counter (`seq N â†’ N+1`) with byte-identical CRC:
-it *resumed*, it did not restart.
+`userfaultfd` while the process is already serving traffic. A 32 MB warm
+instance goes from checkpoint to `RUNNING` in **~0.6 ms** — versus
+~0.7 s of genuine cold-start work and ~8 ms eager full-copy — and the
+restored instance continues its own sequence counter (`seq N → N+1`) with
+byte-identical CRC: it *resumed*, it did not restart.
+
+## Why it matters — real numbers, no simulation
+
+Cold start below does **genuine work**: loads and CRC-verifies a 256 MB
+dataset before serving (the "load models / build indexes" tax every real
+service pays). Nothing is slept away.
+
+| Mode (32 MB heap + real 256 MB data-load+verify) | Activation | vs cold |
+|---|---|---|
+| Cold start (genuine work: 256 MB load + CRC verify) | 655–710 ms | baseline |
+| Eager resume | 8.1 ms | ~85× |
+| Lazy resume (HotPod) | **0.580 ms** | **~1,130×** |
+
+Reproduce: `powershell -File hotpod.ps1 p3` (battery) — every run prints
+`RESULT` lines and matching CRC digests on both sides.
 
 ## System architecture
 
