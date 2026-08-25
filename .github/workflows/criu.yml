@@ -80,6 +80,9 @@ jobs:
       - name: CRIU lazy-pages roundtrip (experimental)
         continue-on-error: true
         run: |
+          CR=/tmp/criu-src/criu/criu
+          # Lazy-pages needs privileged mode; runner root has CAP_SYS_ADMIN.
+          # (setcap/unprivileged variant above stays for eager flows.)
           HB=/tmp/lhb.log; : >"$HB"
           ./phase3/demo_app --init-ms 300 --warm-mb 8 >>"$HB" 2>&1 &
           APP=$!
@@ -88,25 +91,33 @@ jobs:
           PRE=$(awk '$1=="HB"{split($2,a,"=");s=a[2]}END{print s+0}' "$HB")
 
           mkdir -p /tmp/lps /tmp/ldump
-          criu page-server --unprivileged --images /tmp/lps --address 127.0.0.1 \
+          sudo "$CR" page-server --images /tmp/lps --address 127.0.0.1 \
                --port 46333 --daemon --pidfile /tmp/lps.pid \
                -o /tmp/lps.log -v1
 
-          criu dump --unprivileged -D /tmp/ldump --lazy-pages \
+          sudo "$CR" dump -D /tmp/ldump --lazy-pages \
                --page-server --address 127.0.0.1 --port 46333 \
                -t $APP --shell-job -o /tmp/ldump.log -v1 &
           DJ=$!
 
-          criu restore --unprivileged --lazy-pages --page-server \
+          sudo "$CR" restore --lazy-pages --page-server \
                --address 127.0.0.1 --port 46333 --images /tmp/lps \
                --shell-job -d --pidfile /tmp/lr.pid \
                -o /tmp/lres.log -v1
           wait $DJ 2>/dev/null || true
 
-          sleep 1.0
-          POST=$(awk '$1=="HB"{split($2,a,"=");print a[2];exit}' "$HB")
+          sleep 1.5
+          # shared heartbeat file: LAST seq belongs to the restored process
+          POST=$(awk '$1=="HB"{split($2,a,"=");s=a[2]}END{print s+0}' "$HB")
           kill "$(cat /tmp/lr.pid)" 2>/dev/null || true
           sudo kill "$(cat /tmp/lps.pid)" 2>/dev/null || true
 
           echo "lazy pre_seq=$PRE post_seq=$POST"
-          [ -n "$POST" ] && echo "CRIU LAZY PAGES OK"
+          tail -n 6 /tmp/lres.log 2>/dev/null || true
+          tail -n 6 /tmp/ldump.log 2>/dev/null || true
+          if [ -n "$POST" ] && [ "$POST" -gt "$PRE" ]; then
+            echo "CRIU LAZY PAGES OK"
+            exit 0
+          fi
+          echo "CRIU LAZY PAGES: continuity not observed"
+          exit 1
