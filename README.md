@@ -1,119 +1,122 @@
 # InstantScale
 
 [![ci](https://github.com/MaNiSh-9211/InstantScale/actions/workflows/ci.yml/badge.svg)](https://github.com/MaNiSh-9211/InstantScale/actions/workflows/ci.yml)
+[![criu-native](https://github.com/MaNiSh-9211/InstantScale/actions/workflows/criu.yml/badge.svg)](https://github.com/MaNiSh-9211/InstantScale/actions/workflows/criu.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> **Instant autoscaling.** Activate pre-warmed processes on new hosts in
-> **sub-millisecond** time by separating *process activation* from *memory
-> transfer* — measured, reproducible, from your Windows desktop.
+**InstantScale makes autoscaling instant**: a pre-warmed Linux process is
+checkpointed, resumed on another host in **sub-millisecond time with 0 % of
+its heap present**, and its memory streams in on demand through
+`userfaultfd` while the process is already serving traffic. A 64 MB warm
+instance goes from checkpoint to `RUNNING` in **0.17–0.55 ms** — versus
+~2.2 s cold start and ~26 ms eager full-copy — and the restored instance
+continues its own sequence counter (`seq N → N+1`) with byte-identical CRC:
+it *resumed*, it did not restart.
 
-InstantScale checkpoints a warm application into a compact image, starts the
-restored instance **immediately with 0% of its heap present**, and streams
-memory pages on demand via the Linux [`userfaultfd`](https://www.kernel.org/doc/html/latest/admin-guide/mm/userfaultfd.html)
-subsystem while the process is already serving traffic.
+## System architecture
 
-## Why it matters
+```mermaid
+graph LR
+    subgraph SH["Source host (container / VM)"]
+        APP["warm process<br/>demo_app (stateful)"]
+        CKPT["self-checkpoint<br/>SIGUSR2 handler"]
+        IMG[("ISIM image<br/>hdr + pages + tail")]
+        PS["pageserver<br/>epoll TCP :46100"]
+    end
 
-| Strategy | Time to RUNNING (64 MB heap) |
-|---|---|
-| Cold start (simulated runtime bootstrap) | ~2,200 ms |
-| Eager migration (copy full snapshot first) | ~26–28 ms |
-| **Lazy migration (InstantScale)** | **0.17 – 0.55 ms** |
+    subgraph TH["Target host"]
+        RES["restored process<br/>RUNNING at seq N+1"]
+        UFFD["userfaultfd fd<br/>MISSING mode"]
+        DAEMON["PF-daemon thread"]
+    end
 
-That is **~4,000–12,000× faster than cold start** and **~50–160× faster than
-eager copy** — and the restored process *continues* its monotonic sequence
-number (`seq N → N+1`) with byte-identical memory digests: it resumed, it did
-not restart.
+    APP -->|SIGUSR2| CKPT --> IMG
+    IMG -->|mmap read-only| PS
+    PS <-->|"TCP: REQ offsets / RSP pages"| DAEMON
+    UFFD ---|epoll EPOLLIN| DAEMON
+    DAEMON -->|"ioctl UFFDIO_COPY (ranged)"| UFFD
+    UFFD -.->|page fault wakes| RES
+    RES -->|touch| UFFD
+```
 
-> **vs GraalVM/Quarkus AOT?** AOT removes JIT boot tax but still births a
-> *cold* instance (empty pools/caches, rebuild per release). InstantScale
-> resumes an already-warm process in sub-ms with full state.
-> Full analysis: [docs/AOT_COMPARISON.md](docs/AOT_COMPARISON.md)
+Every connection above is real code: the checkpoint path lives in
+[`phase3/demo_app.c`](phase3/demo_app.c), the wire in
+[`phase2/common.h`](phase2/common.h) + [`phase2/pageserver.c`](phase2/pageserver.c),
+and the fault path in [`phase2/restorer.c`](phase2/restorer.c) /
+[`phase3/puller.h`](phase3/puller.h).
 
-## Measured results (Windows dev box → Docker Desktop → WSL2 5.15 kernel)
+## Feature matrix
 
-| Test | Result |
-|---|---|
-| Phase 1 kernel trap/inject | PASS · first read issued **0.001 ms** after wipe |
-| Phase 2 lazy vs eager A/B (256 MB) | RUNNING in **0.34 ms vs 205 ms** (611×) |
-| Phase 2 prefetch efficiency | **96.9 %** of pages served with zero network RTT |
-| Phase 3 lifecycle (64 MB heap) | cold 2187 ms · eager 25.8 ms · **lazy 0.55 ms** |
-| Phase 3 stability | lazy resume **5/5 runs** clean, continuity + digest OK |
-| Phase 4 **multi-host** (two containers, real network) | **activated in 2.45 ms**, seq continuity + CRC match |
+| Category | Features | Status |
+|---|---|---|
+| Kernel paging | `userfaultfd(MISSING)` registration, ranged `UFFDIO_COPY`, eventfd teardown | ✅ shipped |
+| Wire protocol | framed META/PAGES/BYE, offset addressing, per-page status, CRC32 digest | ✅ shipped |
+| Prefetch | adaptive lookahead (1→32 pages), tagged ring cache, piggyback batching | ✅ shipped |
+| Hydration perf | speculative run-merging: one ranged ioctl installs waiter + successors | ✅ shipped |
+| Resilience | self-healing re-request, duplicate-response tolerance, partial-write resume | ✅ shipped |
+| Lifecycle | SIGUSR2 self-checkpoint → eager/lazy resume, uptime + seq continuity | ✅ shipped |
+| Multi-host | two-container migration over docker bridge; orchestrator w/ gates | ✅ shipped |
+| Fan-out | N replicas from one checkpoint, concurrently | ✅ shipped |
+| CRIU bridge | source-built CRIU v4.1 in CI; eager dump→restore continuity proven | ✅ CI-verified |
+| CRIU lazy-pages (`--lazy-pages`) | privileged-root experiment wired, diagnostics artifacted | 🔄 experimental |
+| Kubernetes CRD | `InstantScaleSession` design sketched in roadmap | ⏳ planned |
 
-## Testing on Windows (primary workflow)
+## Key design decisions
 
-Everything targets Linux syscalls, but the whole stack runs on your Windows
-machine through Docker Desktop privileged containers:
+| # | Decision | Approach | Why |
+|---|---|---|---|
+| 1 | Fault interception | `userfaultfd(2)` + epoll daemon, not signals/ptrace | kernel-native, no signal storms, scales to many pages (ADR-0001) |
+| 2 | Addressing | region *offsets* on the wire, never virtual addresses | source/target ASLR layouts may differ post-CRIU (ADR-0002) |
+| 3 | Prefetch store | FIFO ring of tagged slots, **full-scan** tag lookup | lookup must never miss an already-fetched page (deadlock class, ADR-0003) |
+| 4 | Installation | speculative run-merging: ranged `UFFDIO_COPY` covers waiter + fetched successors | ~31 pages per syscall measured; hydration 107→439 MB/s (ADR-0004) |
+| 5 | Lost-prefetch recovery | idempotent re-request when fault finds neither ring nor in-flight state | evictions must not deadlock (ADR-0005) |
+| 6 | Teardown | eventfd poked before `pthread_join`; fds closed only after join | close-under-reader races caused EBADF (ADR-0006) |
+| 7 | Language | C11 + raw syscalls for cores; orchestrators in bash/PowerShell | zero-GC, exact struct/ioctl layout for kernel contracts (ADR-0007) |
+| 8 | Capture format | self-describing ISIM image `[hdr][pages][tail{seq,uptime}]` | portable lifecycle today; CRIU parser ready beside it (ADR-0008) |
+| 9 | Dev workflow | everything tested from Windows via privileged Docker Desktop containers | userfaultfd is Linux-only; dev box is Windows (ADR-0009) |
+
+Full rationale: [docs/decisions/](docs/decisions/).
+
+## Quick start
+
+Windows (primary):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File iscale.ps1 all     # every phase, green in one shot
-powershell -ExecutionPolicy Bypass -File iscale.ps1 mvp     # Phase 1: kernel mechanics proof
-powershell -ExecutionPolicy Bypass -File iscale.ps1 p2      # Phase 2: LAZY vs EAGER wire demo
-powershell -ExecutionPolicy Bypass -File iscale.ps1 p3      # Phase 3: scale-out lifecycle battery
-powershell -ExecutionPolicy Bypass -File iscale.ps1 mh      # Phase 4: TWO-HOST migration over a real network
-powershell -ExecutionPolicy Bypass -File iscale.ps1 hammer  # deadlock/stress suite
+git clone https://github.com/MaNiSh-9211/InstantScale.git
+cd InstantScale
+powershell -ExecutionPolicy Bypass -File iscale.ps1 all     # phases 1-4, green
 ```
 
-The runner auto-starts Docker Desktop if needed and builds the `iscale-devel`
-image (gcc + CRIU) on first use.
+Linux / macOS-style shell:
 
-## Repository layout
-
-```
-InstantScale/
-├── iscale.ps1              # ONE-COMMAND Windows runner for every phase
-├── Makefile                # CI/Linux entry points (same tests)
-├── INSTRUCTIONS.local.md   # project brief (git-ignored, local only)
-├── .dev/Dockerfile         # devel image: gcc + CRIU + python tooling
-├── docs/
-│   ├── ARCHITECTURE.md     # system design & kernel mechanics
-│   └── ROADMAP.md          # phased delivery plan + status
-├── mvp/                    # Phase 1: self-faulting prototype (C)
-│   └── uffd_selffault.c    # trap/inject mechanics, fully annotated
-├── phase2/                 # Phase 2: split-process page service over TCP
-│   ├── common.h            # ISIM image format + wire protocol + helpers
-│   ├── seeder.c            # deterministic warm-heap image builder
-│   ├── pageserver.c        # epoll TCP page server (source host)
-│   ├── restorer.c          # uffd client: batching + adaptive prefetch ring
-│   ├── demo.sh             # LAZY vs EAGER comparison harness
-│   └── hammer.sh           # stability/deadlock stress (10×)
-└── phase3/                 # Phase 3: real-process instant scale-out
-    ├── demo_app.c          # stateful service w/ full InstantScale lifecycle
-    ├── puller.h            # condensed PF-daemon used at lazy-resume
-    ├── analyze.c           # CRIU-image skeleton/bulk splitter & reporter
-    ├── iscale.sh           # orchestrator: cold/eager/lazy migrations
-    └── battery.sh          # validation battery (stability included)
-└── phase4/                 # Phase 4: multi-host live migration
-    ├── source_node.sh      # Host A: warm -> checkpoint -> serve pages
-    ├── target_node.sh      # Host B: lazy resume over the wire
-    └── multihost.ps1       # two-container orchestrator (docker bridge)
+```bash
+docker compose up --build -d && docker compose logs -f target   # multi-host demo
+# or natively (Linux ≥ 5.11): make -C phase2 && make -C phase2 demo
 ```
 
-## How the magic works
+## Ports & endpoints
 
-1. A warm instance snapshots itself (`SIGUSR2`) into an ISIM image:
-   `[header][heap pages][tail {seq, uptime}]` — kilobytes of metadata plus
-   bulk pages, deliberately separated.
-2. The target maps an **empty** region and arms `userfaultfd(MISSING)` —
-   activation requires only the header/tail (~100 bytes).
-3. Execution resumes instantly. Every touched page traps into the kernel,
-   wakes the PF-Daemon (epoll), which fetches exactly that 4 KB page over
-   TCP and installs it atomically with `ioctl(UFFDIO_COPY)` — the blocked
-   instruction simply completes. No SIGSEGV, no polling.
-4. Sequential-touch detection + an adaptive prefetch window mean most pages
-   are already local when referenced (96.9 % RTT-free in our sweeps).
+| Port | Component | Defined in |
+|---|---|---|
+| 46100 | pageserver default (phase2/multihost/compose) | `IS_DEFAULT_PORT`, common.h |
+| 46200 | phase3 orchestrator runs | phase3/iscale.sh `PORT` |
+| 46250 | fan-out spike | phase3/fanout.sh `PORT` |
+| 46333 | CI lazy-pages page-server | .github/workflows/criu.yml |
 
-## Requirements
+Container name `iscale-src`, network `iscale-net` (see
+[docker-compose.yml](docker-compose.yml)).
 
-- Windows 10/11 + Docker Desktop (WSL2 backend), or any Linux host with
-  kernel ≥ 5.11 and gcc/make.
-- No WSL distro setup needed — containers provide the Linux environment.
+## Documentation
 
-## Roadmap
-
-See [docs/ROADMAP.md](docs/ROADMAP.md). Next: CRIU integration on native
-Linux CI (blocked only inside docker-desktop's VM kernel today), then
-multi-host orchestration and Kubernetes CRD wiring.
+| Doc | Contents |
+|---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | module-level graph, degradation matrix, perf budget |
+| [docs/REQUEST_LIFECYCLE.md](docs/REQUEST_LIFECYCLE.md) | one page-fault, traced end-to-end with measured costs |
+| [docs/DIAGRAMS.md](docs/DIAGRAMS.md) | visual reference: defense-in-depth, pipelines, state machines |
+| [docs/AOT_COMPARISON.md](docs/AOT_COMPARISON.md) | vs GraalVM/Quarkus ahead-of-time compilation |
+| [docs/decisions/](docs/decisions/) | architecture decision records |
+| [DOCKER.md](DOCKER.md) | every build/run/log command, both shells |
+| [CHANGELOG.md](CHANGELOG.md) | reverse-chronological, ADR-referenced |
 
 ## License
 

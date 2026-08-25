@@ -1,0 +1,39 @@
+# InstantScale - two-host lazy migration stack
+# Up:   docker compose up --build -d
+# Logs: docker compose logs -f target
+# Down: docker compose down
+#
+# The target activates lazily; its pages cross the private bridge network.
+# Heartbeats/checkpoint land in ./artifacts (bind mount).
+
+services:
+  source:
+    build:
+      context: .
+      dockerfile: .dev/Dockerfile
+    image: iscale-devel
+    container_name: iscale-src
+    privileged: true            # userfaultfd is blocked by default seccomp
+    networks: [iscale-net]
+    volumes:
+      - .:/src
+    working_dir: /src
+    environment:
+      INIT_MS: "1200"
+      HEAP_MB: "32"
+      PORT: "46100"
+    command: bash /src/phase4/source_node.sh
+
+  target:
+    image: iscale-devel
+    privileged: true
+    networks: [iscale-net]
+    volumes:
+      - .:/src
+    working_dir: /src
+    depends_on: [source]        # target_node.sh polls for the checkpoint file
+    command: bash /src/phase4/target_node.sh source 46100 lazy
+
+networks:
+  iscale-net:
+    name: iscale-net
