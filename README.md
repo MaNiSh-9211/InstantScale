@@ -1,5 +1,7 @@
 # InstantScale
 
+[![ci](https://github.com/MaNiSh-9211/InstantScale/actions/workflows/ci.yml/badge.svg)](https://github.com/MaNiSh-9211/InstantScale/actions/workflows/ci.yml)
+
 > **Instant autoscaling.** Activate pre-warmed processes on new hosts in
 > **sub-millisecond** time by separating *process activation* from *memory
 > transfer* — measured, reproducible, from your Windows desktop.

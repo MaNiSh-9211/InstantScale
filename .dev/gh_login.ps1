@@ -13,7 +13,7 @@ if ($Phase -eq "request") {
     $r = Invoke-RestMethod -Method Post `
         -Uri "https://github.com/login/device/code" `
         -Headers @{ Accept = "application/json" } `
-        -Body @{ client_id = $client; scope = "repo" }
+        -Body @{ client_id = $client; scope = "repo read:org workflow" }
 
     Set-Content (Join-Path $tmp "device_code") $r.device_code
     Set-Content (Join-Path $tmp "interval")    $r.interval
@@ -31,20 +31,33 @@ if ($Phase -eq "complete") {
     if ($interval -lt 5) { $interval = 5 }
 
     $token = $null
-    for ($i = 0; $i -lt 80; $i++) {
+    $expired = $false
+    for ($i = 0; $i -lt 100; $i++) {
         Start-Sleep -Seconds $interval
-        $r = Invoke-RestMethod -Method Post `
-            -Uri "https://github.com/login/oauth/access_token" `
-            -Headers @{ Accept = "application/json" } `
-            -Body @{
-                client_id     = $client
-                device_code   = $device
-                grant_type    = "urn:ietf:params:oauth:grant-type:device_code"
-            }
+        try {
+            $r = Invoke-RestMethod -Method Post `
+                -Uri "https://github.com/login/oauth/access_token" `
+                -Headers @{ Accept = "application/json" } `
+                -Body @{
+                    client_id   = $client
+                    device_code = $device
+                    grant_type  = "urn:ietf:params:oauth:grant-type:device_code"
+                }
+        } catch {
+            Write-Host "x" -NoNewline   # transient network noise: retry
+            continue
+        }
         if ($r.access_token) { $token = $r.access_token; break }
         if ($r.error -eq "authorization_pending") { Write-Host "." -NoNewline; continue }
         if ($r.error -eq "slow_down")             { $interval += 5;      continue }
+        if ($r.error -eq "expired_token")         { $expired = $true;    break }
         Write-Host ""; Write-Host ("flow error: " + $r.error); exit 1
+    }
+
+    if ($expired) {
+        Write-Host ""
+        Write-Host "device code EXPIRED - re-run the 'request' phase" -ForegroundColor Red
+        exit 2
     }
 
     if (-not $token) { Write-Host "timed out waiting for approval"; exit 1 }

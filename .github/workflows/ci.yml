@@ -1,0 +1,56 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  linux-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends criu build-essential
+
+      - name: Kernel tuning (best effort)
+        run: sudo sysctl -w vm.unprivileged_userfaultfd=1 || true
+
+      - name: "Phase 1: userfaultfd self-faulting prototype"
+        run: |
+          make -C mvp clean all
+          ./mvp/uffd_selffault
+
+      - name: "Phase 2: split-process page service (LAZY vs EAGER)"
+        run: |
+          make -C phase2 clean all
+          bash phase2/demo.sh
+
+      - name: "Phase 2: stability hammer"
+        run: bash phase2/hammer.sh 64 5
+
+      - name: "Phase 3: scale-out lifecycle battery"
+        run: |
+          make -C phase3 clean all
+          make -C phase2 pageserver
+          bash phase3/battery.sh
+
+      - name: "Phase 3: fan-out spike (10 replicas)"
+        run: |
+          cd phase3
+          WARM_MB=16 INIT_MS=800 bash fanout.sh 10
+
+      - name: "CRIU availability probe (native kernel)"
+        run: |
+          criu --version
+          sleep 500 &
+          SP=$!
+          mkdir -p /tmp/cp/d
+          criu dump -D /tmp/cp/d -t $SP --shell-job -o /tmp/cp/dump.log -v1 \
+            && echo "CRIU DUMP OK - full CRIU migration is unblocked on native Linux" \
+            || { echo "CRIU dump failed:"; tail -n 8 /tmp/cp/dump.log; }
+          kill $SP 2>/dev/null || true
