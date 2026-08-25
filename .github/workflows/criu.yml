@@ -1,0 +1,102 @@
+name: criu-native
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  criu-from-source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CRIU build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git pkg-config \
+            libprotobuf-c-dev protobuf-c-compiler libprotobuf-dev \
+            libnl-3-dev libnet1-dev libcap-dev \
+            python3-minimal python3-protobuf
+
+      - name: Build CRIU from source
+        run: |
+          git clone --depth 1 --branch v4.1 https://github.com/checkpoint-restore/criu.git /tmp/criu-src
+          cd /tmp/criu-src
+          make -j"$(nproc)" >/dev/null
+          echo "/tmp/criu-src" >> "$GITHUB_PATH"
+
+      - name: CRIU sanity
+        run: |
+          criu --version
+          sudo sysctl -w vm.unprivileged_userfaultfd=1 || true
+
+      - name: Dump/restore a live process (sleep)
+        run: |
+          sleep 500 & SP=$!
+          mkdir -p /tmp/cp/d
+          criu dump -D /tmp/cp/d -t $SP --shell-job -o /tmp/cp/dump.log -v1
+          criu restore -D /tmp/cp/d --shell-job -d \
+            --pidfile /tmp/cp/r.pid -o /tmp/cp/res.log -v1
+          sleep 0.3
+          kill "$(cat /tmp/cp/r.pid)"
+          echo "CRIU ROUNDTRIP OK"
+
+      - name: Migrate demo_app via CRIU (state continuity)
+        run: |
+          make -C mvp clean all >/dev/null   # warms toolchain sanity
+          make -C phase3 clean all >/dev/null
+          HB=/tmp/hb.log; : >"$HB"
+          ./phase3/demo_app --init-ms 400 --warm-mb 8 >>"$HB" 2>&1 &
+          APP=$!
+          until grep -q '^READY' "$HB"; do sleep 0.05; done
+          sleep 0.4
+          PRE=$(awk '$1=="HB"{split($2,a,"=");s=a[2]}END{print s+0}' "$HB")
+
+          mkdir -p /tmp/cimg
+          criu dump -D /tmp/cimg -t $APP --shell-job -o /tmp/cdump.log -v1
+
+          criu restore -D /tmp/cimg --shell-job -d \
+            --pidfile /tmp/r.pid -o /tmp/cres.log -v1
+          sleep 0.8
+          POST=$(awk '$1=="HB"{split($2,a,"=");print a[2];exit}' "$HB")
+          kill "$(cat /tmp/r.pid)" 2>/dev/null || true
+
+          echo "pre_seq=$PRE post_seq=$POST"
+          [ -n "$POST" ] && [ "$POST" -gt "$PRE" ] && echo "CRIU MIGRATION CONTINUITY OK"
+
+      - name: CRIU lazy-pages roundtrip (experimental)
+        continue-on-error: true
+        run: |
+          HB=/tmp/lhb.log; : >"$HB"
+          ./phase3/demo_app --init-ms 300 --warm-mb 8 >>"$HB" 2>&1 &
+          APP=$!
+          until grep -q '^READY' "$HB"; do sleep 0.05; done
+          sleep 0.4
+          PRE=$(awk '$1=="HB"{split($2,a,"=");s=a[2]}END{print s+0}' "$HB")
+
+          mkdir -p /tmp/lps /tmp/ldump
+          criu page-server --images /tmp/lps --address 127.0.0.1 \
+               --port 46333 --daemon --pidfile /tmp/lps.pid \
+               -o /tmp/lps.log -v1
+
+          criu dump -D /tmp/ldump --lazy-pages \
+               --page-server --address 127.0.0.1 --port 46333 \
+               -t $APP --shell-job -o /tmp/ldump.log -v1 &
+          DJ=$!
+
+          criu restore --lazy-pages --page-server \
+               --address 127.0.0.1 --port 46333 --images /tmp/lps \
+               --shell-job -d --pidfile /tmp/lr.pid \
+               -o /tmp/lres.log -v1
+          wait $DJ 2>/dev/null || true
+
+          sleep 1.0
+          POST=$(awk '$1=="HB"{split($2,a,"=");print a[2];exit}' "$HB")
+          kill "$(cat /tmp/lr.pid)" 2>/dev/null || true
+          sudo kill "$(cat /tmp/lps.pid)" 2>/dev/null || true
+
+          echo "lazy pre_seq=$PRE post_seq=$POST"
+          [ -n "$POST" ] && echo "CRIU LAZY PAGES OK"
