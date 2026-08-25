@@ -24,6 +24,11 @@ eager copy** — and the restored process *continues* its monotonic sequence
 number (`seq N → N+1`) with byte-identical memory digests: it resumed, it did
 not restart.
 
+> **vs GraalVM/Quarkus AOT?** AOT removes JIT boot tax but still births a
+> *cold* instance (empty pools/caches, rebuild per release). InstantScale
+> resumes an already-warm process in sub-ms with full state.
+> Full analysis: [docs/AOT_COMPARISON.md](docs/AOT_COMPARISON.md)
+
 ## Measured results (Windows dev box → Docker Desktop → WSL2 5.15 kernel)
 
 | Test | Result |
