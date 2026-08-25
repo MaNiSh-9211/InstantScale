@@ -42,8 +42,8 @@ jobs:
         run: |
           sleep 500 & SP=$!
           mkdir -p /tmp/cp/d
-          criu dump -D /tmp/cp/d -t $SP --shell-job -o /tmp/cp/dump.log -v1
-          criu restore -D /tmp/cp/d --shell-job -d \
+          criu dump --unprivileged -D /tmp/cp/d -t $SP --shell-job -o /tmp/cp/dump.log -v1
+          criu restore --unprivileged -D /tmp/cp/d --shell-job -d \
             --pidfile /tmp/cp/r.pid -o /tmp/cp/res.log -v1
           sleep 0.3
           kill "$(cat /tmp/cp/r.pid)"
@@ -61,9 +61,9 @@ jobs:
           PRE=$(awk '$1=="HB"{split($2,a,"=");s=a[2]}END{print s+0}' "$HB")
 
           mkdir -p /tmp/cimg
-          criu dump -D /tmp/cimg -t $APP --shell-job -o /tmp/cdump.log -v1
+          criu dump --unprivileged -D /tmp/cimg -t $APP --shell-job -o /tmp/cdump.log -v1
 
-          criu restore -D /tmp/cimg --shell-job -d \
+          criu restore --unprivileged -D /tmp/cimg --shell-job -d \
             --pidfile /tmp/r.pid -o /tmp/cres.log -v1
           sleep 0.8
           POST=$(awk '$1=="HB"{split($2,a,"=");print a[2];exit}' "$HB")
@@ -83,16 +83,16 @@ jobs:
           PRE=$(awk '$1=="HB"{split($2,a,"=");s=a[2]}END{print s+0}' "$HB")
 
           mkdir -p /tmp/lps /tmp/ldump
-          criu page-server --images /tmp/lps --address 127.0.0.1 \
+          criu page-server --unprivileged --images /tmp/lps --address 127.0.0.1 \
                --port 46333 --daemon --pidfile /tmp/lps.pid \
                -o /tmp/lps.log -v1
 
-          criu dump -D /tmp/ldump --lazy-pages \
+          criu dump --unprivileged -D /tmp/ldump --lazy-pages \
                --page-server --address 127.0.0.1 --port 46333 \
                -t $APP --shell-job -o /tmp/ldump.log -v1 &
           DJ=$!
 
-          criu restore --lazy-pages --page-server \
+          criu restore --unprivileged --lazy-pages --page-server \
                --address 127.0.0.1 --port 46333 --images /tmp/lps \
                --shell-job -d --pidfile /tmp/lr.pid \
                -o /tmp/lres.log -v1
