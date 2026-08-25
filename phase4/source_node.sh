@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-# InstantScale Phase 4 — SOURCE NODE (runs inside the "Host A" container)
+﻿#!/usr/bin/env bash
+# HotPod Phase 4 â€” SOURCE NODE (runs inside the "Host A" container)
 #
 # Lifecycle:
 #   1. build binaries (bind-mounted repo)
@@ -35,7 +35,7 @@ grep -q '^READY' artifacts/src_hb.log || { echo "[source] app never became READY
 sleep 0.5   # accumulate heartbeats -> continuity anchor seq
 
 PRE_SEQ=$(awk '$1=="HB"{split($2,a,"=");s=a[2]}END{print s+0}' artifacts/src_hb.log)
-echo "[source] pre-migration seq=$PRE_SEQ — checkpointing"
+echo "[source] pre-migration seq=$PRE_SEQ â€” checkpointing"
 
 kill -USR2 "$APP"
 wait "$APP" 2>/dev/null || true
@@ -46,5 +46,5 @@ echo "[source] checkpoint written: $(stat -c%s artifacts/app.isim) bytes"
 echo "$PRE_SEQ" > artifacts/pre_seq.txt
 touch artifacts/checkpoint.ready      # Windows orchestrator polls this
 
-echo "[source] serving pages on :$PORT — target may activate now"
+echo "[source] serving pages on :$PORT â€” target may activate now"
 exec ./phase2/pageserver --port "$PORT" --image artifacts/app.isim

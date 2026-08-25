@@ -1,9 +1,15 @@
-# Changelog
+﻿# Changelog
 
 All notable changes. Reverse chronological.
 ADRs referenced as `docs/decisions/NNNN-*.md`.
 
-## [0.4.0] - 2026-08-25 — CRIU unblocked on native Linux
+## [0.4.1] - 2026-08-25 - renamed to HotPod
+
+### Changed
+- Project renamed **InstantScale to HotPod**: GitHub repo, README branding, runner iscale.ps1 to hotpod.ps1, orchestrator phase3/iscale.sh to phase3/hotpod.sh, containers hotpod-src / network hotpod-net / image hotpod-devel, and all code banners + docs.
+- Added project logo (assets/logo.png) and centered README banner.
+
+## [0.4.0] - 2026-08-25 â€” CRIU unblocked on native Linux
 
 ### Added
 - `criu-native` CI workflow: builds CRIU v4.1 from source on ubuntu-24.04;
@@ -19,14 +25,14 @@ ADRs referenced as `docs/decisions/NNNN-*.md`.
 - CI `ci.yml`: enables Ubuntu universe pocket; CRIU probe degrades to a skip
   when the package is absent.
 
-## [0.3.2] - 2026-08-25 — speculative run-merging (hydration invention)
+## [0.3.2] - 2026-08-25 â€” speculative run-merging (hydration invention)
 
 ### Added
 - **Run-merging installer** (ADR-0004): response pages are grouped into
   maximal consecutive runs and installed via one ranged
   `ioctl(UFFDIO_COPY)` covering the faulting page *and* already-fetched
-  successors. Measured on the 64 MB sweep: readiness 530 → **146 ms**,
-  throughput 107 → **439 MB/s**, ~31 pages per syscall.
+  successors. Measured on the 64 MB sweep: readiness 530 â†’ **146 ms**,
+  throughput 107 â†’ **439 MB/s**, ~31 pages per syscall.
 
 ### Fixed
 - Install-before-consume ordering bug: staged pointers referenced the socket
@@ -36,21 +42,21 @@ ADRs referenced as `docs/decisions/NNNN-*.md`.
   `last_fault_idx` advances past merged runs so piggyback windows stay ahead
   of execution (ADR-0010).
 
-## [0.3.1] - 2026-08-25 — multi-host migration
+## [0.3.1] - 2026-08-25 â€” multi-host migration
 
 ### Added
 - Phase 4 two-host demo: `phase4/multihost.ps1` + `source_node.sh` /
-  `target_node.sh`; two containers on docker bridge `iscale-net`.
+  `target_node.sh`; two containers on docker bridge `hotpod-net`.
 - Measured: cross-network activation **2.45 ms**, continuity PASS,
   uniform final digest.
-- Fan-out spike (`fanout.sh`): N replicas from one checkpoint concurrently —
-  10 replicas all RUNNING in 21–33 ms wall, continuity 10/10.
+- Fan-out spike (`fanout.sh`): N replicas from one checkpoint concurrently â€”
+  10 replicas all RUNNING in 21â€“33 ms wall, continuity 10/10.
 
 ### Fixed
 - `is_tcp_connect` resolves hostnames via `getaddrinfo`
-  (docker DNS names like `iscale-src` previously failed `inet_pton`).
+  (docker DNS names like `hotpod-src` previously failed `inet_pton`).
 
-## [0.3.0] - 2026-08-25 — real-process lifecycle
+## [0.3.0] - 2026-08-25 â€” real-process lifecycle
 
 ### Added
 - `demo_app` full lifecycle: cold-bootstrap tax, deterministic warm heap,
@@ -59,7 +65,7 @@ ADRs referenced as `docs/decisions/NNNN-*.md`.
   (`--resume-lazy-img`) resume paths (ADR-0008).
 - Condensed PF-daemon `puller.h` used during lazy-resume.
 - `battery.sh`: cold/eager/lazy A/B with continuity assertions
-  (cold ≈ 2.19 s · eager ≈ 26 ms · lazy ≈ 0.55 ms @ 64 MB; lazy stability 5/5).
+  (cold â‰ˆ 2.19 s Â· eager â‰ˆ 26 ms Â· lazy â‰ˆ 0.55 ms @ 64 MB; lazy stability 5/5).
 - `analyze.c`: splits real CRIU image dirs into skeleton vs bulk with ratios.
 
 ### Fixed
@@ -67,29 +73,29 @@ ADRs referenced as `docs/decisions/NNNN-*.md`.
 - Ring-cache lookup deadlock: full-scan tag lookup replaces probe math;
   self-healing re-request covers evicted prefetches (ADR-0003, ADR-0005).
 
-## [0.2.0] - 2026-08-25 — split-process wire
+## [0.2.0] - 2026-08-25 â€” split-process wire
 
 ### Added
 - ISIM image format + framed TCP protocol (`common.h`): META/PAGES/BYE,
   offset addressing (ADR-0002), per-page status, rolling CRC32 digest.
 - epoll TCP `pageserver.c` serving pages from an mmap'd checkpoint image
   with partial-write resume and multi-client support.
-- `restorer.c` daemon: userfaultfd registration, request batching (≤64),
+- `restorer.c` daemon: userfaultfd registration, request batching (â‰¤64),
   adaptive prefetch ring + lookahead controller, latency histogram,
   LAZY-vs-EAGER harness (`demo.sh`): 256 MB heap RUNNING in 0.34 ms vs
-  205 ms eager (611×); prefetch serves 96.9 % of pages with zero RTT.
+  205 ms eager (611Ã—); prefetch serves 96.9 % of pages with zero RTT.
 
 ### Fixed
 - epoll listener detection stored fd through the data union then tested
-  `ptr == NULL` (segfault on first accept) — sentinel-tagged now.
+  `ptr == NULL` (segfault on first accept) â€” sentinel-tagged now.
 
-## [0.1.0] - 2026-08-25 — kernel mechanics MVP
+## [0.1.0] - 2026-08-25 â€” kernel mechanics MVP
 
 ### Added
-- Self-faulting prototype (`mvp/uffd_selffault.c`): mmap warm state →
-  register MISSING → `MADV_DONTNEED` wipe → background epoll daemon traps
+- Self-faulting prototype (`mvp/uffd_selffault.c`): mmap warm state â†’
+  register MISSING â†’ `MADV_DONTNEED` wipe â†’ background epoll daemon traps
   faults, fabricates pages, installs via `UFFDIO_COPY`.
 - Acceptance: first read issued **0.001 ms** after wipe; zero SIGSEGVs;
   all faults served; value + pattern integrity verified.
-- Windows runner `iscale.ps1` (privileged containers), root Makefile,
+- Windows runner `hotpod.ps1` (privileged containers), root Makefile,
   docs skeleton, MIT license.

@@ -1,5 +1,5 @@
-/*
- * InstantScale — pageserver.c
+﻿/*
+ * HotPod â€” pageserver.c
  * The SOURCE-HOST side of the wire: holds the checkpoint image (mmap'd,
  * zero extra copies beyond one memcpy per served page) and streams 4 KB
  * pages to any number of restoring hosts.
@@ -11,7 +11,7 @@
  *   the production PF-Daemon's remote side.
  * - Per-connection receive buffer + frame state machine; send side uses a
  *   growable buffer flushed with partial-write handling (EPOLLOUT armed on
- *   EAGAIN). TCP_NODELAY everywhere — a Nagle-delayed 4 KB page would eat
+ *   EAGAIN). TCP_NODELAY everywhere â€” a Nagle-delayed 4 KB page would eat
  *   the entire latency budget.
  * - Requests address pages by OFFSET within the logical region so source
  *   and target virtual layouts can differ freely.
@@ -26,7 +26,7 @@ typedef struct {
     size_t   rlen, rcap;
     uint8_t *sbuf;               /* pending response bytes                  */
     size_t   slen, scap, ssent;
-    bool     closing;            /* BYE seen — flush then drop              */
+    bool     closing;            /* BYE seen â€” flush then drop              */
 } conn_t;
 
 static int    g_epfd;
@@ -81,8 +81,8 @@ static inline void sbuf_put(conn_t *c, const void *p, size_t n)
     c->slen += n;
 }
 
-/* Serve one PAGES_REQ: append header + N × (page_hdr | page bytes).
- * Page bytes come straight from the mmap'd image — one copy total. */
+/* Serve one PAGES_REQ: append header + N Ã— (page_hdr | page bytes).
+ * Page bytes come straight from the mmap'd image â€” one copy total. */
 static void handle_pages_req(conn_t *c, uint32_t count, const uint8_t *offs_raw)
 {
     is_wire_hdr rh = {
@@ -101,7 +101,7 @@ static void handle_pages_req(conn_t *c, uint32_t count, const uint8_t *offs_raw)
                                 .data_len = g_hdr->page_size };
         if (off >= g_hdr->region_len ||
             off % g_hdr->page_size != 0) { /* never trust the peer */
-            fprintf(stderr, "[pageserver] OOB offset %" PRIu64 " — dropping\n",
+            fprintf(stderr, "[pageserver] OOB offset %" PRIu64 " â€” dropping\n",
                     off);
             ph.status = IS_PAGE_OOB;
             ph.data_len = 0;
@@ -128,7 +128,7 @@ static void process_recv(conn_t *c)
         memcpy(&h, c->rbuf, sizeof(h)); /* alignment-safe */
         if (h.magic != IS_WIRE_MAGIC || h.count > IS_MAX_BATCH) {
             fprintf(stderr, "[pageserver] bad frame (magic/type/count)"
-                            " — dropping client\n");
+                            " â€” dropping client\n");
             c->closing = true;
             break;
         }
@@ -144,7 +144,7 @@ static void process_recv(conn_t *c)
         case IS_REQ_BYE:
             break;
         default:
-            fprintf(stderr, "[pageserver] unknown type %u — dropping\n",
+            fprintf(stderr, "[pageserver] unknown type %u â€” dropping\n",
                     h.type);
             c->closing = true;
             goto done;
@@ -155,7 +155,7 @@ static void process_recv(conn_t *c)
         uint8_t *body = c->rbuf + sizeof(h);
         switch (h.type) {
         case IS_REQ_META: {
-            /* Build wire_meta explicitly — never slice the disk header,
+            /* Build wire_meta explicitly â€” never slice the disk header,
              * its field order differs from the wire struct's. */
             is_wire_meta wm = {
                 .region_len = g_hdr->region_len,
@@ -238,7 +238,7 @@ int main(int argc, char **argv)
     }
 
     /* Map the checkpoint once; every future page serve reads from this
-     * mapping — no pread syscalls, no heap copies, page-cache friendly. */
+     * mapping â€” no pread syscalls, no heap copies, page-cache friendly. */
     int ifd = open(img_path, O_RDONLY);
     if (ifd == -1)
         is_die("pageserver", "open(image)", errno);
@@ -267,7 +267,7 @@ int main(int argc, char **argv)
         is_die("pageserver", "epoll_create1", errno);
 
     int lfd = is_tcp_listen(port);
-    /* Tag the listener with a unique address — data.fd and data.ptr share a
+    /* Tag the listener with a unique address â€” data.fd and data.ptr share a
      * union, so testing ptr==NULL while storing fd would hand back the fd
      * bits reinterpreted as a pointer (instant segfault on first accept). */
     static char listener_tag;

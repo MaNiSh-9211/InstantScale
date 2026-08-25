@@ -1,5 +1,5 @@
-/*
- * InstantScale — puller.h (Phase 3)
+﻿/*
+ * HotPod â€” puller.h (Phase 3)
  * Condensed PF-Daemon used by demo_app --resume-lazy: arms nothing itself;
  * the caller creates the userfaultfd + socket and hands them over. Implements
  * batched page requests, a fixed-window sequential prefetch landing in tagged
@@ -33,7 +33,7 @@ typedef struct {
     /* prefetch landing slots (tag-scan lookup) */
     uint64_t tag[PP_SLOTS];
     bool     valid[PP_SLOTS];
-    uint8_t *slotbuf;               /* PP_SLOTS × ps                     */
+    uint8_t *slotbuf;               /* PP_SLOTS Ã— ps                     */
     unsigned next_slot;
 
     /* request batching */
@@ -42,7 +42,7 @@ typedef struct {
     uint64_t last_idx;
     volatile bool shutdown;
 
-    /* faults awaiting data — WITHOUT this, responses would be parked into
+    /* faults awaiting data â€” WITHOUT this, responses would be parked into
      * slots while the application thread slept forever (Phase 2 lesson). */
     pp_pend  pend[PP_MAX_PEND];
     unsigned npend;

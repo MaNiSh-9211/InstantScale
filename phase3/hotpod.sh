@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-# InstantScale Phase 3 orchestrator — the autoscaling story, end to end:
+﻿#!/usr/bin/env bash
+# HotPod Phase 3 orchestrator â€” the autoscaling story, end to end:
 #
 #   cold   : fresh process incl. simulated runtime bootstrap (--init-ms)
 #   eager  : warm instance checkpoints itself (SIGUSR2) -> image copied to
@@ -8,7 +8,7 @@
 #            --resume-lazy activates INSTANTLY, pages arrive behind execution
 #
 # Continuity proof: heartbeats carry a monotonic seq. The first post-resume
-# heartbeat must continue at exactly last_seq+1 — the process RESUMED.
+# heartbeat must continue at exactly last_seq+1 â€” the process RESUMED.
 # Final integrity: SIGTERM triggers a full-heap CRC sweep ("FINAL digest=").
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -17,7 +17,7 @@ MODE=${1:-all}
 WARM_MB=${WARM_MB:-32}
 INIT_MS=${INIT_MS:-2000}
 PORT=${PORT:-46200}
-WORK=$(mktemp -d /tmp/iscale3.XXXXXX)
+WORK=$(mktemp -d /tmp/hotpod3.XXXXXX)
 PIDS=()
 cleanup() { for p in "${PIDS[@]:-}"; do kill "$p" 2>/dev/null || true; done; }
 trap cleanup EXIT

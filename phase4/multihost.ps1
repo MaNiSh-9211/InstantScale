@@ -1,8 +1,8 @@
-# ============================================================================
-#  InstantScale Phase 4 - MULTI-HOST MIGRATION ORCHESTRATOR (Windows)
+﻿# ============================================================================
+#  HotPod Phase 4 - MULTI-HOST MIGRATION ORCHESTRATOR (Windows)
 # ----------------------------------------------------------------------------
 #  Two containers on a private docker bridge act as two hosts:
-#    iscale-src : boots warm app, checkpoints, serves pages on :46100
+#    hotpod-src : boots warm app, checkpoints, serves pages on :46100
 #    target     : lazy-resumes; its pages arrive across the REAL network
 #
 #  Usage:
@@ -20,9 +20,9 @@ param(
 
 $ErrorActionPreference = "Continue"
 $root  = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$img   = "iscale-devel"
-$net   = "iscale-net"
-$src   = "iscale-src"
+$img   = "hotpod-devel"
+$net   = "hotpod-net"
+$src   = "hotpod-src"
 $port  = "46100"
 
 function Info([string]$m) { Write-Host ("[mh] " + $m) -ForegroundColor Cyan }

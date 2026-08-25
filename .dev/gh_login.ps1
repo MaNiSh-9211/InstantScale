@@ -1,4 +1,4 @@
-# ============================================================================
+﻿# ============================================================================
 #  GitHub CLI authentication via raw OAuth Device Flow (no TTY required)
 #  Usage:  powershell -File gh_login.ps1 request    -> prints URL + one-time code
 #          powershell -File gh_login.ps1 complete   -> polls token, feeds gh
@@ -6,7 +6,7 @@
 param([Parameter(Mandatory = $true)][string]$Phase)
 
 $client = "178c6fc778ccc68e1d6a"   # GitHub CLI's public OAuth client_id
-$tmp    = "$env:TEMP\iscale_gh"
+$tmp    = "$env:TEMP\hotpod_gh"
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 
 if ($Phase -eq "request") {

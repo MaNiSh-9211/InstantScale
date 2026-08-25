@@ -1,14 +1,14 @@
-/*
- * InstantScale — analyze.c (Phase 3)
- * CRIU image-split analyzer: quantifies and DEMONSTRATES the core InstantScale
+﻿/*
+ * HotPod â€” analyze.c (Phase 3)
+ * CRIU image-split analyzer: quantifies and DEMONSTRATES the core HotPod
  * thesis on a real checkpoint directory:
  *
  *   SKELETON = everything that is NOT bulk memory (registers, VMAs, page
- *              tables, fds, ...)  → the only thing activation truly needs
- *   BULK     = pages-*.img          → the heavy payload we stream lazily
+ *              tables, fds, ...)  â†’ the only thing activation truly needs
+ *   BULK     = pages-*.img          â†’ the heavy payload we stream lazily
  *
  * It reports sizes/ratios per file, then physically splits the directory into
- * <dir>-split/skeleton/ + <dir>-split/pages/ — programmatic manipulation of
+ * <dir>-split/skeleton/ + <dir>-split/pages/ â€” programmatic manipulation of
  * CRIU images, separating page-layout metadata from binary page storage.
  */
 #include <dirent.h>

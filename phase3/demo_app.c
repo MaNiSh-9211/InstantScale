@@ -1,7 +1,7 @@
-/*
- * InstantScale — demo_app.c (Phase 3)
+﻿/*
+ * HotPod â€” demo_app.c (Phase 3)
  * A realistic stand-in for a pre-warmed production service whose lifecycle
- * is owned by InstantScale:
+ * is owned by HotPod:
  *
  *   RUN      cold bootstrap (--init-ms models JVM/V8 startup tax) -> heap
  *            warm-up -> steady heartbeats carrying a monotonic SEQ number.
@@ -9,7 +9,7 @@
  *            (the "scale-in to warm image" moment). SIGUSR1 snapshots but
  *            keeps serving (warm-pool refresh).
  *   RESUME   --resume IMG               eager: whole heap read before HB #1
- *            --resume-lazy HOST PORT IMG  InstantScale: arm userfaultfd,
+ *            --resume-lazy HOST PORT IMG  HotPod: arm userfaultfd,
  *            activate INSTANTLY, stream pages on demand from a phase2
  *            pageserver. First post-resume heartbeat continues at seq=N+1:
  *            proof the process RESUMED instead of restarted.
@@ -174,7 +174,7 @@ int main(int argc, char **argv)
             close(fd);
             printf("RESUMED-EAGER seq=%llu activated_in=%.3f ms\n",
                    (unsigned long long)seq, now_ms() - t_start);
-        } else {      /* LAZY: skeleton only — pages arrive via uffd      */
+        } else {      /* LAZY: skeleton only â€” pages arrive via uffd      */
             close(fd);
             uffd = (int)syscall(__NR_userfaultfd,
                                 (unsigned long)O_CLOEXEC |

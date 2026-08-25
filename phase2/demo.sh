@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-# InstantScale Phase 2 demo — the whole pitch in ~10 seconds:
+﻿#!/usr/bin/env bash
+# HotPod Phase 2 demo â€” the whole pitch in ~10 seconds:
 #   1. seed a deterministic "warm heap" checkpoint (like a CRIU image)
 #   2. start the page server (source host holding the memory)
 #   3. LAZY  restore: target activates instantly, pages stream on demand
@@ -9,16 +9,16 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 PORT=${PORT:-46100}
-PAGES=${PAGES:-65536}          # 65536 × 4 KB = 256 MB heap
+PAGES=${PAGES:-65536}          # 65536 Ã— 4 KB = 256 MB heap
 TMP=$(mktemp -d)
 SRV=""
 cleanup() { [[ -n "$SRV" ]] && kill "$SRV" 2>/dev/null || true; rm -rf "$TMP"; }
 trap cleanup EXIT
 
-echo "── seeding warm heap (${PAGES} pages) ──────────────────────────"
+echo "â”€â”€ seeding warm heap (${PAGES} pages) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€"
 ./seeder "$TMP/warm.isim" "$PAGES"
 
-echo "── starting page server on :$PORT ──────────────────────────────"
+echo "â”€â”€ starting page server on :$PORT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€"
 ./pageserver --port "$PORT" --image "$TMP/warm.isim" >"$TMP/server.log" 2>&1 &
 SRV=$!
 for _ in $(seq 1 100); do
@@ -27,11 +27,11 @@ for _ in $(seq 1 100); do
 done
 
 echo
-echo "════ RUN 1: LAZY — InstantScale activation ════"
+echo "â•â•â•â• RUN 1: LAZY â€” HotPod activation â•â•â•â•"
 IS_EAGER=0 IS_PREFETCH=4 ./restorer --port "$PORT" | tee "$TMP/lazy.log"
 
 echo
-echo "════ RUN 2: EAGER — today's copy-everything migration ════"
+echo "â•â•â•â• RUN 2: EAGER â€” today's copy-everything migration â•â•â•â•"
 IS_EAGER=1 ./restorer --port "$PORT" | tee "$TMP/eager.log"
 
 echo

@@ -1,11 +1,11 @@
-#!/usr/bin/env bash
-# InstantScale — FAN-OUT autoscaling demo
+﻿#!/usr/bin/env bash
+# HotPod â€” FAN-OUT autoscaling demo
 #
 # THE SPIKE SCENARIO: traffic doubles, the autoscaler needs 10 more warm
 # replicas RIGHT NOW. With one existing checkpoint:
 #
 #   traditional : N x cold bootstrap (sequential minutes) or N x full-copy
-#   InstantScale: N replicas activate CONCURRENTLY, each in ~sub-ms,
+#   HotPod: N replicas activate CONCURRENTLY, each in ~sub-ms,
 #                 pages streaming behind execution from one page server
 #
 # Continuity + integrity verified per replica (seq == pre+1, uniform CRC).
@@ -16,7 +16,7 @@ N=${1:-10}
 WARM_MB=${WARM_MB:-16}
 INIT_MS=${INIT_MS:-1500}
 PORT=${PORT:-46250}
-WORK=$(mktemp -d /tmp/iscaleN.XXXXXX)
+WORK=$(mktemp -d /tmp/hotpodN.XXXXXX)
 IMG=/tmp/demo_app.isim
 PIDS=()
 cleanup() { for p in "${PIDS[@]:-}"; do kill "$p" 2>/dev/null || true; done; }

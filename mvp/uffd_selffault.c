@@ -1,12 +1,12 @@
-/*
- * InstantScale — Phase 1 MVP: single-process self-faulting prototype
+﻿/*
+ * HotPod â€” Phase 1 MVP: single-process self-faulting prototype
  * ==================================================================
  *
  * WHAT THIS PROVES
  * ----------------
  * That a process can keep RUNNING while its own memory is "not there yet":
  *   1. We mmap a region and populate it with known data (the "warm heap").
- *   2. We arm userfaultfd(MISSING) on that region — the kernel now owes us
+ *   2. We arm userfaultfd(MISSING) on that region â€” the kernel now owes us
  *      a notification every time a *not-present* page is touched.
  *   3. We wipe the physical pages with madvise(MADV_DONTNEED). The virtual
  *      addresses remain valid; the backing RAM is gone. This is exactly the
@@ -18,7 +18,7 @@
  *   5. The daemon fabricates the page (in production: fetched over the wire
  *      from the source host) and installs it atomically with
  *      ioctl(UFFDIO_COPY). The trapped thread resumes as if nothing happened
- *      — no SIGSEGV, no manual signal handling, pure kernel cooperation.
+ *      â€” no SIGSEGV, no manual signal handling, pure kernel cooperation.
  *
  * THE TWO THREADS
  * ---------------
@@ -48,8 +48,8 @@
 #include <stdio.h>              /* printf, fprintf, perror */
 #include <stdlib.h>             /* strtol, abort */
 #include <string.h>             /* memset, memcpy, strerror_r */
-#include <sys/epoll.h>          /* epoll_create1, epoll_wait — async fault pump */
-#include <sys/eventfd.h>        /* eventfd — race-free shutdown wakeup          */
+#include <sys/epoll.h>          /* epoll_create1, epoll_wait â€” async fault pump */
+#include <sys/eventfd.h>        /* eventfd â€” race-free shutdown wakeup          */
 #include <sys/ioctl.h>          /* ioctl(UFFDIO_*) */
 #include <sys/mman.h>           /* mmap, madvise, MADV_DONTNEED */
 #include <sys/syscall.h>        /* __NR_userfaultfd */
@@ -84,7 +84,7 @@ static double now_ms(void)
 }
 
 /* Fatal error helper: prints "<who>: <what>: <errno string>" and dies.
- * Every syscall failure funnels through here with its raw errno preserved —
+ * Every syscall failure funnels through here with its raw errno preserved â€”
  * granular errors are a hard project constraint. */
 static void die(const char *who, const char *what, int err)
 {
@@ -123,7 +123,7 @@ static void serve_page_fault(struct pf_daemon_ctx *ctx, uint64_t fault_addr,
 
     /* The kernel reports the exact byte that missed; UFFDIO_COPY works on
      * whole pages, so snap DOWN to the page boundary. Pure integer math on
-     * uintptr_t — no pointer arithmetic games. */
+     * uintptr_t â€” no pointer arithmetic games. */
     uintptr_t page = (uintptr_t)fault_addr & ~(uintptr_t)(ps - 1);
 
     /* Which slot inside the tracked region does this page belong to?
@@ -158,7 +158,7 @@ static void serve_page_fault(struct pf_daemon_ctx *ctx, uint64_t fault_addr,
      *   .src  : our staging buffer holding the full page image
      *   .len  : exactly one page (must match registration granularity)
      *   .mode : 0 = wake the waiting thread after installing the PTE
-     *   .copy : OUT — bytes actually copied, OR -errno on failure
+     *   .copy : OUT â€” bytes actually copied, OR -errno on failure
      *
      * The kernel atomically maps the page and wakes EVERY thread blocked on
      * this specific missing page. From main's point of view the load simply
@@ -178,7 +178,7 @@ static void serve_page_fault(struct pf_daemon_ctx *ctx, uint64_t fault_addr,
         if (ioctl(ctx->uffd_fd, UFFDIO_COPY, &uc) == -1) {
             int e = errno;
             if (e == EAGAIN || e == EINTR)
-                continue; /* transient — spin (bounded in real daemons) */
+                continue; /* transient â€” spin (bounded in real daemons) */
             free(staging);
             die("pf_daemon", "ioctl(UFFDIO_COPY)", e);
         }
@@ -260,7 +260,7 @@ static void *pf_daemon_main(void *arg)
                 ssize_t r = read(fd, &msg, sizeof(msg));
 
                 if (r == -1 && errno == EAGAIN)
-                    break; /* queue empty — back to epoll */
+                    break; /* queue empty â€” back to epoll */
 
                 if (r != (ssize_t)sizeof(msg))
                     die("pf_daemon", "read(uffd_msg)", errno == 0 ? EIO : errno);
@@ -290,13 +290,13 @@ static void *pf_daemon_main(void *arg)
             break; /* leave the epoll loop; fds are owned by main now */
     }
 
-    close(epfd); /* only our epoll instance — uffd/eventfd belong to main */
+    close(epfd); /* only our epoll instance â€” uffd/eventfd belong to main */
     printf("  [pf-daemon] shutdown signal received -> exiting cleanly\n");
     return NULL;
 }
 
 /* ------------------------------------------------------------------ */
-/* MAIN — plays the restored application                               */
+/* MAIN â€” plays the restored application                               */
 /* ------------------------------------------------------------------ */
 
 int main(void)
@@ -306,12 +306,12 @@ int main(void)
     size_t ps = (size_t)sysconf(_SC_PAGESIZE); /* never hardcode 4096 */
     size_t region_len = NUM_PAGES * ps;
 
-    printf("=== InstantScale Phase 1 MVP — self-faulting prototype ===\n");
+    printf("=== HotPod Phase 1 MVP â€” self-faulting prototype ===\n");
     printf("[main] page size         : %zu bytes\n", ps);
     printf("[main] heap simulation   : %zu pages, %zu bytes total\n",
            (size_t)NUM_PAGES, region_len);
 
-    /* STEP 1 — allocate the "heap". MAP_ANONYMOUS|MAP_PRIVATE gives zeroed
+    /* STEP 1 â€” allocate the "heap". MAP_ANONYMOUS|MAP_PRIVATE gives zeroed
      * demand-paged memory, exactly what a runtime's heap looks like to the
      * kernel. Virtual range reserved; physical pages appear lazily. */
     void *region = mmap(NULL, region_len, PROT_READ | PROT_WRITE,
@@ -330,7 +330,7 @@ int main(void)
     }
     printf("[main] seeded warm state : page[i] word0 == i+1\n");
 
-    /* STEP 2 — acquire the userfaultfd. There is no glibc wrapper; this is a
+    /* STEP 2 â€” acquire the userfaultfd. There is no glibc wrapper; this is a
      * raw syscall. O_CLOEXEC: fds must never leak across exec. O_NONBLOCK:
      * event reads and UFFDIO_COPY never wedge the daemon thread. */
     int uffd = (int)syscall(__NR_userfaultfd, (unsigned long)O_CLOEXEC |
@@ -358,9 +358,9 @@ int main(void)
     printf("[main] userfaultfd ready : api=%" PRIu64 "\n",
            (uint64_t)api.api);
 
-    /* STEP 3 — register the region in MISSING mode: "pages under here may be
+    /* STEP 3 â€” register the region in MISSING mode: "pages under here may be
      * absent; when someone touches an absent page, wake me on this uffd."
-     * Range must be page-aligned — ours is, since mmap returned a boundary. */
+     * Range must be page-aligned â€” ours is, since mmap returned a boundary. */
     struct uffdio_register reg = {
         .range = { .start = (uint64_t)(uintptr_t)region,
                    .len = region_len },
@@ -375,10 +375,10 @@ int main(void)
         die("main", "UFFDIO_COPY not supported for range", EINVAL);
     printf("[main] registered MISSING: %p +%zu bytes\n", region, region_len);
 
-    /* STEP 4 — start the PF-daemon BEFORE wiping memory. Any fault between
+    /* STEP 4 â€” start the PF-daemon BEFORE wiping memory. Any fault between
      * registration and daemon-start would hang forever otherwise. */
     /* Shutdown channel for the daemon: eventfd is an 8-byte counter that
-     * epoll treats as readable the instant anyone writes to it — the
+     * epoll treats as readable the instant anyone writes to it â€” the
      * standard race-free way to wake (and stop) an event loop. */
     int stop_efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
     if (stop_efd == -1)
@@ -402,7 +402,7 @@ int main(void)
     if (pthread_create(&daemon_tid, NULL, pf_daemon_main, &ctx) != 0)
         die("main", "pthread_create(pf-daemon)", errno);
 
-    /* STEP 5 — the "migration moment": discard all backing RAM while keeping
+    /* STEP 5 â€” the "migration moment": discard all backing RAM while keeping
      * the virtual mappings. Post-madvise, the region is byte-for-byte what a
      * skeleton-restored process sees: valid VMAs, no pages behind them.
      * MADV_DONTNEED on MAP_PRIVATE drops the private copy immediately. */
@@ -411,11 +411,11 @@ int main(void)
         die("main", "madvise(MADV_DONTNEED)", errno);
     t_wipe_done = now_ms();
 
-    /* STEP 6 — ACTIVATION. Nothing blocks startup: the very next statement
+    /* STEP 6 â€” ACTIVATION. Nothing blocks startup: the very next statement
      * executes within microseconds of the wipe. THIS is the metric that
      * matters: process state went SKELETON -> RUNNING without transferring
      * a single bulk page. */
-    printf("--- STATE: RUNNING — resuming execution immediately ---\n");
+    printf("--- STATE: RUNNING â€” resuming execution immediately ---\n");
     t_first_read_issued = now_ms();
 
     volatile uint64_t *first_word = (volatile uint64_t *)region;
@@ -434,7 +434,7 @@ int main(void)
     if (got != 1)
         die("main", "value integrity check", EPROTO);
 
-    /* STEP 7 — walk the rest of the "heap": every untouched page takes its
+    /* STEP 7 â€” walk the rest of the "heap": every untouched page takes its
      * own trap/inject round trip on first access. Sequential access patterns
      * like this are what the future prefetcher will exploit. */
     printf("\n--- hydrating remaining pages on demand ---\n");
@@ -444,7 +444,7 @@ int main(void)
         if (v != (uint64_t)i + 1)
             die("main", "per-page integrity check", EPROTO);
 
-        /* Verify the pattern bytes too — proves FULL pages arrived, not just
+        /* Verify the pattern bytes too â€” proves FULL pages arrived, not just
          * the first word (a classic lazy-paging bug class). */
         char *body = (char *)word + sizeof(uint64_t);
         for (size_t b = 0; b < ps - sizeof(uint64_t); ++b)
@@ -454,7 +454,7 @@ int main(void)
 
     /* Teardown order matters (this is where naive versions deadlock or
      * race with EBADF):
-     *  1. All pages are present again — closing the uffd is safe, since no
+     *  1. All pages are present again â€” closing the uffd is safe, since no
      *     future MISSING fault exists to hit a deaf listener (= SIGSEGV).
      *  2. Poke the eventfd FIRST so the daemon's epoll wakes on purpose,
      *     then join it. Only after the thread is gone do we close its fds;
@@ -473,7 +473,7 @@ int main(void)
            served, NUM_PAGES);
     printf("SIGSEGVs                        : 0 (kernel trapped silently)\n");
     printf("VERDICT                         : %s\n",
-           served == NUM_PAGES ? "PASS — trap/inject cycle verified"
-                               : "FAIL — fault count mismatch");
+           served == NUM_PAGES ? "PASS â€” trap/inject cycle verified"
+                               : "FAIL â€” fault count mismatch");
     return served == NUM_PAGES ? 0 : 1;
 }

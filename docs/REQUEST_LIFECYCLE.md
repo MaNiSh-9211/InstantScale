@@ -1,6 +1,6 @@
-# Request lifecycle: one page fault under lazy resume
+﻿# Request lifecycle: one page fault under lazy resume
 
-The representative "request" in InstantScale is not HTTP — it is a **missing
+The representative "request" in HotPod is not HTTP â€” it is a **missing
 page**: the restored application touches memory that has not arrived yet.
 Below is the full journey of page `idx = 4096` (offset 16 MiB) during the
 64 MB battery run, with costs measured from that run
@@ -17,13 +17,13 @@ sequenceDiagram
     participant PS as pageserver (TCP :46100)
 
     Note over App: uptime t, first touch of idx 4096
-    App->>K: load → PTE absent → sleep in handle_userfault
+    App->>K: load â†’ PTE absent â†’ sleep in handle_userfault
     K->>D: uffd_msg{PAGEFAULT, addr} (queued instantly)
     D->>D: pend[] += {idx, aligned_addr, t0}
     D->>PS: REQ frame {hdr, offsets...} (batched w/ piggyback)
-    PS->>PS: bounds check → memcpy from mmap'd image
+    PS->>PS: bounds check â†’ memcpy from mmap'd image
     PS-->>D: RSP frame {page_hdr+4KB}...
-    D->>D: run-merge consecutive pages → staging buffer
+    D->>D: run-merge consecutive pages â†’ staging buffer
     D->>K: ioctl(UFFDIO_COPY) ranged install
     K-->>App: wake; the original load completes
     App->>App: continue heartbeat loop
@@ -33,18 +33,18 @@ sequenceDiagram
 
 | # | Step | Layer | Cost (this run) | Notes |
 |---|---|---|---|---|
-| 0 | connect + META handshake + register region | control plane | ≈ 0.30 ms cumulative to `RUNNING` | activation gate; only KBs moved |
+| 0 | connect + META handshake + register region | control plane | â‰ˆ 0.30 ms cumulative to `RUNNING` | activation gate; only KBs moved |
 | 1 | app executes `*(volatile u64*)(base+off)` | app | ~ns | compiler-volatile read |
-| 2 | kernel page-walk misses → park thread | kernel | sub-µs to enqueue | `wchan=handle_userfault` observed |
-| 3 | daemon epoll returns EPOLLIN(uffd), reads `uffd_msg` | daemon | µs-class | non-blocking drain loop |
-| 4 | ring lookup miss → `pend[]` append + sendq append | daemon | ns–µs | dedup by state machine |
-| 5 | adaptive lookahead appends successors N+1..N+k | daemon policy | ns | k ∈ [1..32], hit-rate driven |
-| 6 | staged frame sent (`send`, MSG_NOSIGNAL, NODELAY) | wire | µs-class | partial-write resume armed |
-| 7 | server parses, bounds-checks, memcpys from mmap'd image, stages reply | pageserver | <50–100 µs bucket for most faults | zero pread; image is mapped |
-| 8 | response reassembled; consecutive run detected (waiter + successors) | daemon | µs | run length up to batch cap |
-| 9 | single ranged `UFFDIO_COPY(dst, staging, k·4096)` | kernel | µs-class per syscall | ~31 pages/syscall typical |
-| 10 | kernel maps pages, wakes ALL waiters in range | kernel | — | app resumes exactly at its load |
-| 11 | latency sample recorded into histogram | daemon | — | buckets in report |
+| 2 | kernel page-walk misses â†’ park thread | kernel | sub-Âµs to enqueue | `wchan=handle_userfault` observed |
+| 3 | daemon epoll returns EPOLLIN(uffd), reads `uffd_msg` | daemon | Âµs-class | non-blocking drain loop |
+| 4 | ring lookup miss â†’ `pend[]` append + sendq append | daemon | nsâ€“Âµs | dedup by state machine |
+| 5 | adaptive lookahead appends successors N+1..N+k | daemon policy | ns | k âˆˆ [1..32], hit-rate driven |
+| 6 | staged frame sent (`send`, MSG_NOSIGNAL, NODELAY) | wire | Âµs-class | partial-write resume armed |
+| 7 | server parses, bounds-checks, memcpys from mmap'd image, stages reply | pageserver | <50â€“100 Âµs bucket for most faults | zero pread; image is mapped |
+| 8 | response reassembled; consecutive run detected (waiter + successors) | daemon | Âµs | run length up to batch cap |
+| 9 | single ranged `UFFDIO_COPY(dst, staging, kÂ·4096)` | kernel | Âµs-class per syscall | ~31 pages/syscall typical |
+| 10 | kernel maps pages, wakes ALL waiters in range | kernel | â€” | app resumes exactly at its load |
+| 11 | latency sample recorded into histogram | daemon | â€” | buckets in report |
 
 Aggregate for the full 64 MB sweep (same run): 16,384 pages hydrated via
 **440** network-fault batches and **440** ranged installs covering
@@ -55,7 +55,7 @@ Aggregate for the full 64 MB sweep (same run): 16,384 pages hydrated via
 
 | Breaks | Detected by | Response | Recovery |
 |---|---|---|---|
-| pageserver killed mid-request | `recv()==0` → `ECONNRESET` | daemon `is_die` (process exits with exact errno) | orchestrator-level restart of the pair |
+| pageserver killed mid-request | `recv()==0` â†’ `ECONNRESET` | daemon `is_die` (process exits with exact errno) | orchestrator-level restart of the pair |
 | socket backpressure (EAGAIN on send) | send loop short write | stage remainder, resume on EPOLLOUT | transparent |
 | ioctl UFFDIO_COPY returns EAGAIN/EINTR | errno / `.copy == -EAGAIN` | retry with cursor advance on partial copy | transparent |
 | prefetched page evicted before its fault | fault finds no ring entry, state==REQ | idempotent re-request (ADR-0005) | one extra RTT for that page |
@@ -66,11 +66,11 @@ Aggregate for the full 64 MB sweep (same run): 16,384 pages hydrated via
 
 ## Cache behaviour (mapped to classic patterns)
 
-| Classic pattern | InstantScale equivalent | Mechanism |
+| Classic pattern | HotPod equivalent | Mechanism |
 |---|---|---|
 | cache stampede / herd | one request per missing page | `pend[]` + `state[]` guarantee a single in-flight request per idx (single-flight) |
 | cache penetration | fault for never-requested page | self-healing re-request path still resolves it (never a silent hang) |
 | cache penetration (bogus key) | OOB/misaligned offset | rejected at server and client; connection dropped |
-| avalanche (mass simultaneous misses) | sequential sweep burst | adaptive lookahead widens window (≤32) and run-merging coalesces installs (~31 pages/ioctl) |
+| avalanche (mass simultaneous misses) | sequential sweep burst | adaptive lookahead widens window (â‰¤32) and run-merging coalesces installs (~31 pages/ioctl) |
 | poisoning | corrupted payload | rolling CRC32 over every page verified against seeder/checkpoint digest; mismatch is fatal (`EPROTO`) |
 | eviction storm | ring pressure | FIFO overwrite is safe: worst case falls back to demand fetch (re-request) |

@@ -1,4 +1,4 @@
-# Diagrams — visual reference
+﻿# Diagrams â€” visual reference
 
 One diagram per concept. All render natively on GitHub.
 
@@ -82,7 +82,7 @@ stateDiagram-v2
     end note
 ```
 
-## 6. Data layout — ISIM image and wire frames
+## 6. Data layout â€” ISIM image and wire frames
 
 ```mermaid
 flowchart LR
@@ -109,11 +109,11 @@ flowchart LR
 ```mermaid
 flowchart TB
     subgraph WIN["Windows dev box"]
-        PS1["iscale.ps1"]
+        PS1["hotpod.ps1"]
         DD["Docker Desktop<br/>(WSL2 VM, kernel 5.15+)"]
         PS1 --> DD
-        subgraph DDN["docker bridge iscale-net"]
-            C1["container iscale-src<br/>demo_app + pageserver"]
+        subgraph DDN["docker bridge hotpod-net"]
+            C1["container hotpod-src<br/>demo_app + pageserver"]
             C2["container target<br/>lazy resume"]
             C1 <-->|"TCP 46100<br/>pages over wire"| C2
         end

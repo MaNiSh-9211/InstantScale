@@ -1,16 +1,16 @@
-# ============================================================================
-#  InstantScale - one-command Windows test runner
+﻿# ============================================================================
+#  HotPod - one-command Windows test runner
 # ----------------------------------------------------------------------------
 #  The project targets Linux kernels (userfaultfd), but EVERYTHING is tested
 #  from your Windows desktop through Docker Desktop privileged containers.
 #
 #  Usage (from the repo folder, any shell):
-#    powershell -ExecutionPolicy Bypass -File iscale.ps1 all     # everything
-#    powershell -ExecutionPolicy Bypass -File iscale.ps1 mvp     # Phase 1
-#    powershell -ExecutionPolicy Bypass -File iscale.ps1 p2      # Phase 2 A/B
-#    powershell -ExecutionPolicy Bypass -File iscale.ps1 p3      # Phase 3 lifecycle
-#    powershell -ExecutionPolicy Bypass -File iscale.ps1 hammer  # stress p2
-#    powershell -ExecutionPolicy Bypass -File iscale.ps1 image   # build image only
+#    powershell -ExecutionPolicy Bypass -File hotpod.ps1 all     # everything
+#    powershell -ExecutionPolicy Bypass -File hotpod.ps1 mvp     # Phase 1
+#    powershell -ExecutionPolicy Bypass -File hotpod.ps1 p2      # Phase 2 A/B
+#    powershell -ExecutionPolicy Bypass -File hotpod.ps1 p3      # Phase 3 lifecycle
+#    powershell -ExecutionPolicy Bypass -File hotpod.ps1 hammer  # stress p2
+#    powershell -ExecutionPolicy Bypass -File hotpod.ps1 image   # build image only
 # ============================================================================
 param([Parameter(Position = 0)][string]$Cmd = "all")
 
@@ -18,12 +18,12 @@ param([Parameter(Position = 0)][string]$Cmd = "all")
 # into terminating errors under "Stop"; we validate via $LASTEXITCODE instead.
 $ErrorActionPreference = "Continue"
 $root = $PSScriptRoot
-$img  = "iscale-devel"
+$img  = "hotpod-devel"
 
 function Ensure-Docker {
     docker info *> $null
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "[iscale] starting Docker Desktop..." -ForegroundColor Cyan
+        Write-Host "[hotpod] starting Docker Desktop..." -ForegroundColor Cyan
         $dd = "C:\Program Files\Docker\Docker\Docker Desktop.exe"
         if (-not (Test-Path $dd)) { throw "Docker Desktop not found at $dd" }
         Start-Process $dd
@@ -40,7 +40,7 @@ function Ensure-Docker {
 function Ensure-Image {
     docker image inspect $img *> $null
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "[iscale] building devel image (gcc + CRIU)..." -ForegroundColor Cyan
+        Write-Host "[hotpod] building devel image (gcc + CRIU)..." -ForegroundColor Cyan
         docker build -t $img "$root\.dev"
     }
 }
@@ -94,10 +94,10 @@ switch ($Cmd.ToLower()) {
         Banner "PHASE 3 : instant scale-out lifecycle (cold / eager / lazy)"
         Lin 'make -C /src/phase3 clean all >/dev/null && make -C /src/phase2 pageserver >/dev/null && bash /src/phase3/battery.sh'
         Write-Host ""
-        Write-Host "[iscale] ALL PHASES GREEN" -ForegroundColor Green
+        Write-Host "[hotpod] ALL PHASES GREEN" -ForegroundColor Green
     }
     default {
-        Write-Host "usage: iscale.ps1 [image|mvp|p2|p3|hammer|mh|all]"
+        Write-Host "usage: hotpod.ps1 [image|mvp|p2|p3|hammer|mh|all]"
         exit 2
     }
 }

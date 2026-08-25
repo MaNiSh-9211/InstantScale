@@ -1,5 +1,5 @@
-#!/usr/bin/env bash
-# InstantScale Phase 4 — TARGET NODE (runs inside the "Host B" container)
+﻿#!/usr/bin/env bash
+# HotPod Phase 4 â€” TARGET NODE (runs inside the "Host B" container)
 #
 # Activates a lazily-restored instance whose pages live on Host A, across the
 # docker bridge network. Prints machine-readable RESULT lines for the

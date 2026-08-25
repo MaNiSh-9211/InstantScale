@@ -1,4 +1,4 @@
-# InstantScale development image: toolchain + CRIU + crit (image decoder)
+﻿# HotPod development image: toolchain + CRIU + crit (image decoder)
 FROM gcc:14
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \

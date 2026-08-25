@@ -1,5 +1,5 @@
-/*
- * InstantScale — seeder.c
+﻿/*
+ * HotPod â€” seeder.c
  * Builds the "checkpointed warm heap": a deterministic image file that plays
  * the role of a CRIU memory dump taken from a pre-warmed service on Host A.
  *
@@ -34,7 +34,7 @@ int main(int argc, char **argv)
 
     /* Build the entire image in memory first: lets us compute the CRC in one
      * pass and write() the file in one shot. For real multi-GB heaps this
-     * streams page-by-page instead — same math, chunked. */
+     * streams page-by-page instead â€” same math, chunked. */
     is_img_hdr hdr;
     memset(&hdr, 0, sizeof(hdr));
     hdr.magic = IS_IMG_MAGIC;
@@ -55,7 +55,7 @@ int main(int argc, char **argv)
         uint8_t *page = img + sizeof(hdr) + (size_t)i * ps;
 
         /* Sentinel word proves per-page addressing correctness across the
-         * wire — if offsets ever skew, sentinels mismatch immediately. */
+         * wire â€” if offsets ever skew, sentinels mismatch immediately. */
         *(uint64_t *)page = (uint64_t)i + 1;
 
         /* Deterministic pseudo-heap: every byte varies, nothing compressible,
@@ -83,7 +83,7 @@ int main(int argc, char **argv)
     free(img);
 
     printf("[%-9s] checkpoint image : %s\n", "seeder", path);
-    printf("[%-9s] region            : %u pages × %zu B = %.1f MB\n",
+    printf("[%-9s] region            : %u pages Ã— %zu B = %.1f MB\n",
            "seeder", num_pages, ps, (double)region_len / (1024.0 * 1024.0));
     printf("[%-9s] digest            : 0x%08" PRIx32 "\n", "seeder", crc);
     printf("[%-9s] built in          : %.2f ms\n", "seeder", is_now_ms() - t0);

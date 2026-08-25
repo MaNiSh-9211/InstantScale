@@ -1,5 +1,5 @@
-/*
- * InstantScale — restorer.c
+﻿/*
+ * HotPod â€” restorer.c
  * The TARGET-HOST side: activates a "restored" process instantly by mapping an
  * EMPTY memory region, arming userfaultfd(MISSING), and pulling every page
  * over TCP exactly when (and only when) execution touches it.
@@ -12,13 +12,13 @@
  *   faults stream pages behind execution     (classic migration bottleneck)
  *
  * Both modes verify the same rolling CRC32 digest at the end, so correctness
- * is proven identically — only the time-to-activation differs, dramatically.
+ * is proven identically â€” only the time-to-activation differs, dramatically.
  *
  * Inventions on top of plain demand paging (all measurable via SUMMARY line):
- *   1. Request batching      — multiple missing pages leave in one frame.
- *   2. Prefetch piggybacking — touching page N silently requests N+1..N+K,
+ *   1. Request batching      â€” multiple missing pages leave in one frame.
+ *   2. Prefetch piggybacking â€” touching page N silently requests N+1..N+K,
  *                              so sequential access never waits on the wire.
- *   3. Ring page cache       — prefetched pages land in a lock-free ring;
+ *   3. Ring page cache       â€” prefetched pages land in a lock-free ring;
  *                              the fault is served from RAM with ZERO RTT
  *                              (counted in `hits`).
  *
@@ -29,7 +29,7 @@
 #include "common.h"
 #include <pthread.h>           /* PF-Daemon thread */
 
-/* Temporary trace facility: IS_DBG=1 ./restorer … (dev only) */
+/* Temporary trace facility: IS_DBG=1 ./restorer â€¦ (dev only) */
 static int DBGv;
 #define DBG(...) do { if (DBGv) fprintf(stderr, __VA_ARGS__); } while (0)
 
@@ -61,13 +61,13 @@ typedef struct {
     size_t   ps;
     uint32_t np;
 
-    uint8_t *state;              /* np × ST_*                            */
+    uint8_t *state;              /* np Ã— ST_*                            */
 
     /* prefetch ring cache */
     unsigned   ring_slots;
     uint64_t  *ring_tag;
     bool      *ring_valid;
-    uint8_t   *ring_buf;         /* ring_slots × ps bytes                */
+    uint8_t   *ring_buf;         /* ring_slots Ã— ps bytes                */
     unsigned   ring_next;
 
     uint32_t   prefetch_k;
@@ -97,8 +97,8 @@ typedef struct {
     long     adj_hits, adj_misses; /* window since last adaptation        */
 
     /* speculative run-merging: one UFFDIO_COPY installs a contiguous run
-     * (waiter's page + already-fetched successors) — kills per-page faults */
-    uint8_t *merge_buf;           /* IS_MAX_BATCH × ps                    */
+     * (waiter's page + already-fetched successors) â€” kills per-page faults */
+    uint8_t *merge_buf;           /* IS_MAX_BATCH Ã— ps                    */
     long     st_merge_runs, st_merged_pages;
 } rctx_t;
 
@@ -158,7 +158,7 @@ static void lat_record(rctx_t *c, double us)
 
 /* Ring lookup: full tag scan. Placement uses a FIFO cursor while faults
  * arrive in arbitrary order, so probing by index arithmetic can miss pages
- * that ARE cached — and a miss on an already-consumed prefetch means
+ * that ARE cached â€” and a miss on an already-consumed prefetch means
  * waiting forever for a response that will never re-arrive (deadlock).
  * 128 validity checks cost ~nothing next to a network round trip. */
 static inline int ring_lookup(rctx_t *c, uint64_t idx)
@@ -228,7 +228,7 @@ static long pend_find(rctx_t *c, uint64_t idx)
  * using SPECULATIVE RUN-MERGING: consecutive offsets (the waiter's page plus
  * already-fetched prefetch successors) are staged contiguously and installed
  * with ONE ranged UFFDIO_COPY. Future touches of those successors find memory
- * PRESENT — no fault, no syscall, no RTT. Batched hydration, invented here so
+ * PRESENT â€” no fault, no syscall, no RTT. Batched hydration, invented here so
  * sequential sweeps cost ~1 syscall per K pages instead of per page. */
 static void process_responses(rctx_t *c)
 {
@@ -305,7 +305,7 @@ static void process_responses(rctx_t *c)
             }
 
             /* Resolve waiters + mark the whole run present. Speculatively
-             * installed pages count as prefetch "hits" — that IS the signal
+             * installed pages count as prefetch "hits" â€” that IS the signal
              * the adaptive lookahead needs to keep growing. */
             double first_lat = -1.0;
             long   waiters = 0;
@@ -329,7 +329,7 @@ static void process_responses(rctx_t *c)
             i = j + 1;
         }
 
-        /* All installs copied out of ibuf — safe to consume the frame now. */
+        /* All installs copied out of ibuf â€” safe to consume the frame now. */
         memmove(c->ibuf, c->ibuf + need, c->ilen - need);
         c->ilen -= need;
     }
@@ -430,7 +430,7 @@ static void *daemon_main(void *arg)
                             }
                         } else if (c->state[idx] == ST_REQ) {
                             /* Marked requested earlier (prefetch), yet the
-                             * data is neither here nor cached — the ring
+                             * data is neither here nor cached â€” the ring
                              * evicted it before this fault arrived. Re-
                              * request idempotently instead of waiting for
                              * a response that will never come. Pages are
@@ -494,8 +494,8 @@ static void *daemon_main(void *arg)
         }
 
         /* Opportunistic prefetch: piggyback the K successors of the highest
-         * touched page onto whatever batch is forming. Sequential access —
-         * the dominant heap pattern — then NEVER waits on the wire.
+         * touched page onto whatever batch is forming. Sequential access â€”
+         * the dominant heap pattern â€” then NEVER waits on the wire.
          * k_cur adapts between 1 and 32 based on observed hit rate. */
         for (uint32_t k = 1; k <= c->k_cur; ++k) {
             uint64_t pi = c->last_fault_idx + k;
@@ -521,7 +521,7 @@ static void *daemon_main(void *arg)
 }
 
 /* ------------------------------------------------------------------ */
-/* Eager mode: the traditional approach — copy everything, THEN run    */
+/* Eager mode: the traditional approach â€” copy everything, THEN run    */
 /* ------------------------------------------------------------------ */
 
 static void eager_fetch_all(int sock, uint8_t *base, size_t ps, uint32_t np,
@@ -558,7 +558,7 @@ static void eager_fetch_all(int sock, uint8_t *base, size_t ps, uint32_t np,
             memcpy(&ph, rxp, sizeof(ph));
             if (ph.status != IS_PAGE_OK)
                 is_die("eager", "page error from server", EPROTO);
-            /* Straight into its final address — no bounce buffer. */
+            /* Straight into its final address â€” no bounce buffer. */
             is_recv_exact(sock, base + ph.offset, ps);
         }
         done += cnt;
@@ -633,7 +633,7 @@ int main(int argc, char **argv)
     if (meta.region_len != (uint64_t)np * ps || ps == 0 || (ps & (ps - 1)))
         is_die("restorer", "inconsistent metadata", EPROTO);
 
-    printf("[%-9s] target region     : %u pages × %zu B (%.1f MB)"
+    printf("[%-9s] target region     : %u pages Ã— %zu B (%.1f MB)"
            " digest=0x%08" PRIx32 "\n", "restorer", np, ps,
            (double)meta.region_len / (1024.0 * 1024.0),
            (uint32_t)meta.digest);
@@ -739,7 +739,7 @@ int main(int argc, char **argv)
     double total_ms = (is_now_us() - t0) / 1e3;
 
     if (!digest_ok)
-        is_die("restorer", "digest mismatch — memory corrupted in transit",
+        is_die("restorer", "digest mismatch â€” memory corrupted in transit",
                EPROTO);
 
     /* ---- teardown: stop daemon FIRST, then BYE, then close ------------ */

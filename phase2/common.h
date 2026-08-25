@@ -1,5 +1,5 @@
-/*
- * InstantScale — common.h
+﻿/*
+ * HotPod â€” common.h
  * Shared definitions for the Phase 2 split-process prototype:
  *   seeder     -> builds the "checkpointed warm heap" image on disk
  *   pageserver -> TCP server streaming 4 KB pages out of that image
@@ -10,12 +10,12 @@
  * --------------------------------------------------------------------------
  * Every frame starts with wire_hdr {magic,type,count,pad}.
  *   C->S  META_REQ    count=0                      -> S->C META_RESP + wire_meta
- *   C->S  PAGES_REQ   count=N + N × wire_off       -> S->C PAGES_RESP(count=N)
- *                                                       + N × (wire_page_hdr + data)
+ *   C->S  PAGES_REQ   count=N + N Ã— wire_off       -> S->C PAGES_RESP(count=N)
+ *                                                       + N Ã— (wire_page_hdr + data)
  *   C->S  BYE         count=0                      -> server closes
  *
  * Pages are addressed by OFFSET within the logical region, never by absolute
- * virtual address — source and target ASLR layouts are free to differ, which
+ * virtual address â€” source and target ASLR layouts are free to differ, which
  * is exactly the situation after a real CRIU restore on another host.
  */
 #ifndef IS_COMMON_H
@@ -27,7 +27,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <arpa/inet.h>         /* inet_pton */
-#include <netdb.h>             /* getaddrinfo — resolve hostnames */
+#include <netdb.h>             /* getaddrinfo â€” resolve hostnames */
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <signal.h>            /* SIGPIPE disposition */
@@ -55,7 +55,7 @@
 /* Protocol constants                                                  */
 /* ------------------------------------------------------------------ */
 
-#define IS_WIRE_MAGIC   0x49535047u          /* "ISPG" InstantScale PaGe */
+#define IS_WIRE_MAGIC   0x49535047u          /* "ISPG" HotPod PaGe */
 #define IS_PROTO_VER    1u
 
 enum {
@@ -69,13 +69,13 @@ enum {
 /* Status codes carried per page in PAGES_RESP. */
 enum {
     IS_PAGE_OK   = 0,
-    IS_PAGE_OOB  = 1,      /* offset beyond region — protocol violation  */
+    IS_PAGE_OOB  = 1,      /* offset beyond region â€” protocol violation  */
 };
 
 #define IS_MAX_BATCH     64u   /* hard cap on pages per request frame     */
 
 /* On-disk checkpoint image ("warm heap snapshot") ------------------------ */
-#define IS_IMG_MAGIC     0x4953494Du        /* "ISIM" InstantScale IMage */
+#define IS_IMG_MAGIC     0x4953494Du        /* "ISIM" HotPod IMage */
 #define IS_IMG_VER       1u
 
 typedef struct {
@@ -158,7 +158,7 @@ static inline void is_log(const char *tag, const char *fmt, ...)
 }
 
 /* ------------------------------------------------------------------ */
-/* CRC32 (IEEE, reflected) — table built once per process              */
+/* CRC32 (IEEE, reflected) â€” table built once per process              */
 /* Used for end-to-end integrity: seeder computes it over all page     */
 /* bytes in index order; restorer recomputes after hydration. Equal    */
 /* values prove every bit survived the wire.                           */
@@ -233,7 +233,7 @@ static inline int is_tcp_listen(uint16_t port)
 }
 
 /* Connect by hostname or dotted IP. getaddrinfo resolves container/service
- * names (e.g. docker DNS "iscale-src"), which inet_pton cannot do. */
+ * names (e.g. docker DNS "hotpod-src"), which inet_pton cannot do. */
 static inline int is_tcp_connect(const char *host, uint16_t port)
 {
     struct addrinfo hints, *res = NULL;

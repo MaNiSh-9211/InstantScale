@@ -1,4 +1,4 @@
-# InstantScale Phase 3 — real CRIU integration
+﻿# InstantScale Phase 3 â€” real CRIU integration
 CC      ?= gcc
 CFLAGS  ?= -O2 -g -Wall -Wextra -Wpedantic -std=gnu11
 
@@ -14,11 +14,11 @@ analyze: analyze.c ../phase2/common.h
 
 # Full migration story: cold vs eager vs lazy + continuity proofs
 migrate: all
-	bash iscale.sh all
+	bash hotpod.sh all
 
 analyze-images: all
-	bash iscale.sh eager >/dev/null 2>&1 || true; \
-	./analyze /tmp/iscale.*/imgs_t 2>/dev/null || true
+	bash hotpod.sh eager >/dev/null 2>&1 || true; \
+	./analyze /tmp/hotpod.*/imgs_t 2>/dev/null || true
 
 clean:
 	rm -f $(BINS)
