@@ -34,6 +34,8 @@ jobs:
         run: |
           criu --version
           sudo sysctl -w vm.unprivileged_userfaultfd=1 || true
+          # CRIU must ptrace its target; Yama restricts to parent->child only.
+          sudo sysctl -w kernel.yama.ptrace_scope=0 || true
 
       - name: Grant checkpoint capability
         run: sudo setcap cap_checkpoint_restore+eip /tmp/criu-src/criu/criu
