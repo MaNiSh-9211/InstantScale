@@ -96,8 +96,16 @@ jobs:
                -o /tmp/lps.log -v1 || echo "[dbg] page-server rc=$?"
           sudo "$CR" dump -D /tmp/ldump --lazy-pages \
                --page-server --address 127.0.0.1 --port 46333 \
-               -t $APP --shell-job -o /tmp/ldump.log -v1 &
+               -t $APP --shell-job                -o /tmp/ldump.log -v1 &
           DJ=$!
+
+          # Race guard: restore must not start before the dump has shipped
+          # its metadata images to the page-server's storage.
+          for _ in $(seq 300); do
+              [ -f /tmp/lps/pstree.img ] && break
+              sleep 0.1
+          done
+
           sudo "$CR" restore --lazy-pages --page-server \
                --address 127.0.0.1 --port 46333 --images /tmp/lps \
                --shell-job -d --pidfile /tmp/lr.pid \
