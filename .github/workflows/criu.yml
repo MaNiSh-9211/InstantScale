@@ -27,7 +27,8 @@ jobs:
           git clone --depth 1 --branch v4.1 https://github.com/checkpoint-restore/criu.git /tmp/criu-src
           cd /tmp/criu-src
           make -j"$(nproc)" >/dev/null
-          echo "/tmp/criu-src" >> "$GITHUB_PATH"
+          test -x criu/criu
+          echo "/tmp/criu-src/criu" >> "$GITHUB_PATH"
 
       - name: CRIU sanity
         run: |
