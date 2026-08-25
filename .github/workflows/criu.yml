@@ -42,9 +42,11 @@ jobs:
         run: |
           sleep 500 & SP=$!
           mkdir -p /tmp/cp/d
-          criu dump --unprivileged -D /tmp/cp/d -t $SP --shell-job -o /tmp/cp/dump.log -v1
+          criu dump --unprivileged -D /tmp/cp/d -t $SP --shell-job -o /tmp/cp/dump.log -v1 \
+            || { echo "--- dump.log ---"; tail -n 30 /tmp/cp/dump.log; exit 1; }
           criu restore --unprivileged -D /tmp/cp/d --shell-job -d \
-            --pidfile /tmp/cp/r.pid -o /tmp/cp/res.log -v1
+            --pidfile /tmp/cp/r.pid -o /tmp/cp/res.log -v1 \
+            || { echo "--- res.log ---"; tail -n 30 /tmp/cp/res.log; exit 1; }
           sleep 0.3
           kill "$(cat /tmp/cp/r.pid)"
           echo "CRIU ROUNDTRIP OK"
