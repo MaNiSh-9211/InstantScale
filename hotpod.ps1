@@ -12,7 +12,10 @@
 #    powershell -ExecutionPolicy Bypass -File hotpod.ps1 hammer  # stress p2
 #    powershell -ExecutionPolicy Bypass -File hotpod.ps1 image   # build image only
 # ============================================================================
-param([Parameter(Position = 0)][string]$Cmd = "all")
+param(
+    [Parameter(Position = 0)][string]$Cmd = "all",
+    [string]$Token = ""
+)
 
 # NOTE: PS 5.1 promotes native stderr noise (e.g. docker's blkio warning)
 # into terminating errors under "Stop"; we validate via $LASTEXITCODE instead.
@@ -83,7 +86,7 @@ switch ($Cmd.ToLower()) {
     "mh" {
         Ensure-Image
         Banner "PHASE 4 : MULTI-HOST migration (two containers, real network)"
-        & powershell -ExecutionPolicy Bypass -File "$root\phase4\multihost.ps1" @args
+        & powershell -ExecutionPolicy Bypass -File "$root\phase4\multihost.ps1" -Token $Token
     }
     "all" {
         Ensure-Image

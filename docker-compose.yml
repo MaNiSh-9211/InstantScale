@@ -1,10 +1,11 @@
-﻿# HotPod - two-host lazy migration stack
+﻿# InstantScale - two-host lazy migration stack
 # Up:   docker compose up --build -d
 # Logs: docker compose logs -f target
 # Down: docker compose down
 #
-# The target activates lazily; its pages cross the private bridge network.
+# The target activates lazily; its pages cross the compose network.
 # Heartbeats/checkpoint land in ./artifacts (bind mount).
+# Set a real token in production:  $env:HOTPOD_TOKEN="<random>" before up.
 
 services:
   source:
@@ -14,12 +15,11 @@ services:
     image: hotpod-devel
     container_name: hotpod-src
     privileged: true            # userfaultfd is blocked by default seccomp
-    networks: [hotpod-net]
     volumes:
       - .:/src
     working_dir: /src
     environment:
-      INIT_MS: "1200"
+      INIT_WORK_MB: "256"
       HEAP_MB: "32"
       PORT: "46100"
       HOTPOD_TOKEN: "${HOTPOD_TOKEN:-dev-only-change-me}"
@@ -28,7 +28,6 @@ services:
   target:
     image: hotpod-devel
     privileged: true
-    networks: [hotpod-net]
     volumes:
       - .:/src
     working_dir: /src
@@ -36,7 +35,3 @@ services:
     environment:
       HOTPOD_TOKEN: "${HOTPOD_TOKEN:-dev-only-change-me}"
     command: bash /src/phase4/target_node.sh source 46100 lazy
-
-networks:
-  hotpod-net:
-    name: hotpod-net

@@ -10,7 +10,8 @@
 set -euo pipefail
 cd /src
 
-INIT_MS=${INIT_MS:-1200}
+INIT_MS=
+INIT_WORK_MB=${INIT_WORK_MB:-256}
 HEAP_MB=${HEAP_MB:-32}
 PORT=${PORT:-46100}
 
@@ -22,7 +23,7 @@ make -C phase3 all       >/dev/null
 make -C phase2 pageserver >/dev/null
 
 echo "[source] booting warm instance (init=${INIT_MS}ms heap=${HEAP_MB}MB)"
-./phase3/demo_app --init-ms "$INIT_MS" --warm-mb "$HEAP_MB" \
+./phase3/demo_app --init-ms "$INIT_MS" --init-work-mb "$INIT_WORK_MB" --warm-mb "$HEAP_MB" \
     --ckpt artifacts/app.isim \
     >>artifacts/src_hb.log 2>&1 &
 APP=$!

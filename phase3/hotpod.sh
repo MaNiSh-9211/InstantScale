@@ -15,7 +15,8 @@ cd "$(dirname "$0")"
 
 MODE=${1:-all}
 WARM_MB=${WARM_MB:-32}
-INIT_MS=${INIT_MS:-2000}
+INIT_MS=${INIT_MS:-0}
+INIT_WORK_MB=${INIT_WORK_MB:-256}
 PORT=${PORT:-46200}
 WORK=$(mktemp -d /tmp/hotpod3.XXXXXX)
 PIDS=()
@@ -25,7 +26,7 @@ trap cleanup EXIT
 now_ms() { date +%s%3N; }
 
 start_fresh() { # $1=hb file -> echoes pid (cold instance)
-    ./demo_app --init-ms "$INIT_MS" --warm-mb "$WARM_MB" >>"$1" 2>&1 &
+    ./demo_app --init-ms "$INIT_MS" --init-work-mb "$INIT_WORK_MB" --warm-mb "$WARM_MB" >>"$1" 2>&1 &
     local p=$!
     PIDS+=("$p")
     echo "$p"

@@ -1,4 +1,4 @@
-﻿<h1 align="center">
+<h1 align="center">
   <img src="assets/logo.png" alt="HotPod — instant autoscaling" width="460">
 </h1>
 
@@ -11,7 +11,7 @@ checkpointed, resumed on another host in **sub-millisecond time with 0 % of
 its heap present**, and its memory streams in on demand through
 `userfaultfd` while the process is already serving traffic. A 64 MB warm
 instance goes from checkpoint to `RUNNING` in **0.17â€“0.55 ms** â€” versus
-~2.2 s cold start and ~26 ms eager full-copy â€” and the restored instance
+~0.7 s real cold start and ~26 ms eager full-copy â€” and the restored instance
 continues its own sequence counter (`seq N â†’ N+1`) with byte-identical CRC:
 it *resumed*, it did not restart.
 

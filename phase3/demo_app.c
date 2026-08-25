@@ -124,9 +124,10 @@ int main(int argc, char **argv)
     setvbuf(stdout, NULL, _IOLBF, 0);
     is_crc_init();
 
-    unsigned long init_ms  = arg_ul(argc, argv, "--init-ms", 2000);
-    unsigned long warm_mb  = arg_ul(argc, argv, "--warm-mb", 32);
-    unsigned long interval = arg_ul(argc, argv, "--interval-ms", 100);
+    unsigned long init_ms    = arg_ul(argc, argv, "--init-ms", 0);
+    unsigned long init_work_mb = arg_ul(argc, argv, "--init-work-mb", 256);
+    unsigned long warm_mb    = arg_ul(argc, argv, "--warm-mb", 32);
+    unsigned long interval   = arg_ul(argc, argv, "--interval-ms", 100);
     const char *resume     = arg_str(argc, argv, "--resume");
     const char *rlazy_img  = arg_str(argc, argv, "--resume-lazy-img");
     const char *host       = arg_str(argc, argv, "--host");
@@ -237,9 +238,31 @@ int main(int argc, char **argv)
                    (unsigned long long)seq, now_ms() - t_start, npages);
         }
     } else { /* --------------------------------------- FRESH COLD PATH ---- */
+        /* Legacy sleep hook (0 by default — we do REAL work instead). */
         struct timespec sl = { .tv_nsec = 50 * 1000 * 1000 };
         while (now_ms() - t_start < (double)init_ms)
-            nanosleep(&sl, NULL); /* simulated runtime bootstrap tax */
+            nanosleep(&sl, NULL);
+
+        /* REAL cold-start work — the cost every runtime pays: load a
+         * dataset (memory writes) and verify it (CPU-bound hashing).
+         * No sleeps. This is the number HotPod deletes on resume. */
+        if (init_work_mb > 0) {
+            size_t wbytes = init_work_mb * (1024 * 1024);
+            uint8_t *wbuf = malloc(wbytes);
+            if (!wbuf)
+                is_die("cold", "malloc(init-work)", ENOMEM);
+            double w0 = now_ms();
+            uint64_t st = 0x243F6A8885A308D3ull;
+            for (size_t b = 0; b < wbytes; b += sizeof(uint64_t)) {
+                st ^= st << 13; st ^= st >> 7; st ^= st << 17;
+                *(uint64_t *)(wbuf + b) = st;
+            }
+            uint32_t wcrc = is_crc_update(0, wbuf, wbytes);
+            double load_ms = now_ms() - w0;
+            printf("INIT real-work: loaded+verified %lu MB in %.1f ms"
+                   " (verify=0x%08x)\n", init_work_mb, load_ms, wcrc);
+            free(wbuf);
+        }
 
         npages = warm_mb * (1024 * 1024) / ps;
         heap = mmap(NULL, npages * ps, PROT_READ | PROT_WRITE,
