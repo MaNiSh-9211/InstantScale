@@ -1,8 +1,6 @@
-﻿<p align="center">
+﻿<h1 align="center">
   <img src="assets/logo.png" alt="HotPod — instant autoscaling" width="460">
-</p>
-
-<h1 align="center">HotPod</h1>
+</h1>
 
 [![ci](https://github.com/MaNiSh-9211/HotPod/actions/workflows/ci.yml/badge.svg)](https://github.com/MaNiSh-9211/HotPod/actions/workflows/ci.yml)
 [![criu-native](https://github.com/MaNiSh-9211/HotPod/actions/workflows/criu.yml/badge.svg)](https://github.com/MaNiSh-9211/HotPod/actions/workflows/criu.yml)
