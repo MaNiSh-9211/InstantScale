@@ -18,7 +18,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential git pkg-config \
             libprotobuf-c-dev protobuf-c-compiler libprotobuf-dev \
-            libnl-3-dev libnet1-dev libcap-dev \
+            protobuf-compiler \
+            libnl-3-dev libnet1-dev libcap-dev uuid-dev \
             python3-minimal python3-protobuf
 
       - name: Build CRIU from source
