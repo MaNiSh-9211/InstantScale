@@ -113,11 +113,30 @@ jobs:
           sudo kill "$(cat /tmp/lps.pid)" 2>/dev/null || true
 
           echo "lazy pre_seq=$PRE post_seq=$POST"
-          tail -n 6 /tmp/lres.log 2>/dev/null || true
-          tail -n 6 /tmp/ldump.log 2>/dev/null || true
+          mkdir -p criu-lazy-logs
+          cp /tmp/lres.log /tmp/ldump.log /tmp/lps.log criu-lazy-logs/ 2>/dev/null || true
+          cp "$HB" criu-lazy-logs/heartbeats.log 2>/dev/null || true
+          tail -n 8 /tmp/lres.log 2>/dev/null || true
+          tail -n 8 /tmp/ldump.log 2>/dev/null || true
+          {
+            echo "### CRIU lazy-pages"
+            echo '```'
+            echo "pre_seq=$PRE post_seq=$POST"
+            grep -E "Error|Warn" /tmp/lres.log | tail -n 5
+            grep -E "Error|Warn" /tmp/ldump.log | tail -n 5
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
           if [ -n "$POST" ] && [ "$POST" -gt "$PRE" ]; then
             echo "CRIU LAZY PAGES OK"
             exit 0
           fi
           echo "CRIU LAZY PAGES: continuity not observed"
           exit 1
+
+      - name: Upload lazy-pages diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: criu-lazy-logs
+          path: criu-lazy-logs/
+          if-no-files-found: ignore
