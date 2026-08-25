@@ -95,6 +95,11 @@ typedef struct {
     /* adaptive prefetch lookahead */
     uint32_t k_cur;               /* effective lookahead (grows/shrinks)  */
     long     adj_hits, adj_misses; /* window since last adaptation        */
+
+    /* speculative run-merging: one UFFDIO_COPY installs a contiguous run
+     * (waiter's page + already-fetched successors) — kills per-page faults */
+    uint8_t *merge_buf;           /* IS_MAX_BATCH × ps                    */
+    long     st_merge_runs, st_merged_pages;
 } rctx_t;
 
 /* Latency histogram edges in microseconds. Bucket i counts samples in
@@ -106,15 +111,16 @@ static const double LAT_EDGES[] = { 50, 100, 250, 500, 1000, 5000, 20000 };
 /* Daemon helpers                                                      */
 /* ------------------------------------------------------------------ */
 
-/* Atomically install one page and wake the blocked application thread.
- * Identical retry semantics as the Phase 1 MVP: O_NONBLOCK uffds may
- * surface EAGAIN; short copies must be resumed at the advanced cursor. */
-static void inject_page(rctx_t *c, uint64_t dst, const uint8_t *src)
+/* Atomically install `len` bytes (one or more whole pages) at `dst` and wake
+ * every thread blocked anywhere inside that range. Same retry semantics as a
+ * single-page copy: O_NONBLOCK uffds surface EAGAIN; short copies resume. */
+static void inject_range(rctx_t *c, uint64_t dst, const uint8_t *src,
+                         size_t len)
 {
     struct uffdio_copy uc = {
         .dst = dst,
         .src = (uint64_t)(uintptr_t)src,
-        .len = c->ps,
+        .len = len,
         .mode = 0,
     };
     for (;;) {
@@ -126,14 +132,20 @@ static void inject_page(rctx_t *c, uint64_t dst, const uint8_t *src)
         }
         if (uc.copy == -EAGAIN)
             continue;
-        if ((size_t)uc.copy < c->ps) {
-            uc.dst += (uint64_t)uc.copy;
-            uc.src += (uint64_t)uc.copy;
-            uc.len -= (uint64_t)uc.copy;
+        if ((size_t)uc.copy < len) {
+            uc.dst += uc.copy;
+            uc.src += uc.copy;
+            uc.len -= uc.copy;
             continue;
         }
         break;
     }
+}
+
+/* Single-page convenience wrapper. */
+static void inject_page(rctx_t *c, uint64_t dst, const uint8_t *src)
+{
+    inject_range(c, dst, src, c->ps);
 }
 
 static void lat_record(rctx_t *c, double us)
@@ -204,9 +216,25 @@ static void send_batch(rctx_t *c)
         c->out_len == 0 ? "fully sent" : "partial (resume on EPOLLOUT)");
 }
 
-/* Parse every complete response frame currently buffered. */
+static long pend_find(rctx_t *c, uint64_t idx)
+{
+    for (unsigned j = 0; j < c->npend; ++j)
+        if (c->pend[j].idx == idx)
+            return (long)j;
+    return -1;
+}
+
+/* Parse every complete response frame currently buffered, then install pages
+ * using SPECULATIVE RUN-MERGING: consecutive offsets (the waiter's page plus
+ * already-fetched prefetch successors) are staged contiguously and installed
+ * with ONE ranged UFFDIO_COPY. Future touches of those successors find memory
+ * PRESENT — no fault, no syscall, no RTT. Batched hydration, invented here so
+ * sequential sweeps cost ~1 syscall per K pages instead of per page. */
 static void process_responses(rctx_t *c)
 {
+    static __thread uint64_t       r_idx[IS_MAX_BATCH];
+    static __thread const uint8_t *r_dat[IS_MAX_BATCH];
+
     for (;;) {
         if (c->ilen < sizeof(is_wire_hdr))
             return;
@@ -216,13 +244,13 @@ static void process_responses(rctx_t *c)
             h.count > IS_MAX_BATCH)
             is_die("daemon", "bad response header", EPROTO);
 
-        size_t need = sizeof(h);
-        /* Precompute frame length using declared count + fixed page size. */
-        need += (size_t)h.count *
-                (sizeof(is_wire_page_hdr) + c->ps);
+        size_t need = sizeof(h) +
+                      (size_t)h.count * (sizeof(is_wire_page_hdr) + c->ps);
         if (c->ilen < need)
             return; /* wait for the rest */
 
+        /* Stage this frame's pages (validated). */
+        uint32_t n = 0;
         uint8_t *p = c->ibuf + sizeof(h);
         for (uint32_t i = 0; i < h.count; ++i) {
             is_wire_page_hdr ph;
@@ -231,29 +259,77 @@ static void process_responses(rctx_t *c)
             const uint8_t *data = p;
             p += ph.status == IS_PAGE_OK ? c->ps : 0;
 
-            if (ph.offset % c->ps != 0 || ph.offset >= (uint64_t)c->np * c->ps)
-                is_die("daemon", "response offset out of range", EPROTO);
-            uint64_t idx = ph.offset / c->ps;
             if (ph.status != IS_PAGE_OK)
                 is_die("daemon", "server reported page error", EPROTO);
-
-            /* Is an application thread actually blocked on this page? */
-            long found = -1;
-            for (unsigned j = 0; j < c->npend; ++j)
-                if (c->pend[j].idx == idx) { found = (long)j; break; }
-
-            if (found >= 0) {
-                pend_t pw = c->pend[found];
-                c->pend[found] = c->pend[--c->npend]; /* swap-remove */
-                inject_page(c, pw.aligned_addr, data);
-                c->state[idx] = ST_LOCAL;
-                ++c->st_net_served;
-                lat_record(c, is_now_us() - pw.t_fault_us);
-            } else {
-                /* Prefetched page: park it in the ring for instant service. */
-                ring_put(c, idx, data);
-            }
+            if (ph.offset % c->ps != 0 ||
+                ph.offset >= (uint64_t)c->np * c->ps)
+                is_die("daemon", "response offset out of range", EPROTO);
+            r_idx[n] = ph.offset / c->ps;
+            r_dat[n] = data;
+            ++n;
         }
+        /* r_dat[] points into ibuf; consumption happens only AFTER the
+         * installs below have copied everything out. */
+
+        /* Group into maximal consecutive runs and resolve each run. */
+        uint32_t i = 0;
+        while (i < n) {
+            uint32_t j = i;
+            while (j + 1 < n && r_idx[j + 1] == r_idx[j] + 1)
+                ++j;
+
+            long w = -1; /* first blocked thread inside this run */
+            for (uint32_t k = i; k <= j && w < 0; ++k)
+                w = pend_find(c, r_idx[k]);
+
+            if (w < 0) {
+                /* Pure-prefetch run: park every page in the ring. */
+                for (uint32_t k = i; k <= j; ++k)
+                    ring_put(c, r_idx[k], r_dat[k]);
+                i = j + 1;
+                continue;
+            }
+
+            uint64_t dst0 = (uint64_t)(uintptr_t)(c->base + r_idx[i] * c->ps);
+
+            if (j > i) { /* MERGED speculative install */
+                size_t bytes = (size_t)(j - i + 1) * c->ps;
+                for (uint32_t k = i; k <= j; ++k)
+                    memcpy(c->merge_buf + (size_t)(k - i) * c->ps,
+                           r_dat[k], c->ps);
+                inject_range(c, dst0, c->merge_buf, bytes);
+                ++c->st_merge_runs;
+                c->st_merged_pages += (long)(j - i + 1);
+            } else {
+                inject_range(c, dst0, r_dat[i], c->ps);
+            }
+
+            /* Resolve waiters + mark the whole run present. Speculatively
+             * installed pages count as prefetch "hits" — that IS the signal
+             * the adaptive lookahead needs to keep growing. */
+            double first_lat = -1.0;
+            long   waiters = 0;
+            for (uint32_t k = i; k <= j; ++k) {
+                long f = pend_find(c, r_idx[k]);
+                if (f >= 0) {
+                    if (first_lat < 0)
+                        first_lat = is_now_us() - c->pend[f].t_fault_us;
+                    c->pend[f] = c->pend[--c->npend]; /* swap-remove */
+                    ++c->st_net_served;
+                    ++waiters;
+                }
+                c->state[r_idx[k]] = ST_LOCAL;
+                if (r_idx[k] > c->last_fault_idx)
+                    c->last_fault_idx = r_idx[k];
+            }
+            if ((long)(j - i + 1) > waiters)
+                c->adj_hits += (long)(j - i + 1) - waiters;
+            if (first_lat >= 0)
+                lat_record(c, first_lat);
+            i = j + 1;
+        }
+
+        /* All installs copied out of ibuf — safe to consume the frame now. */
         memmove(c->ibuf, c->ibuf + need, c->ilen - need);
         c->ilen -= need;
     }
@@ -617,10 +693,11 @@ int main(int argc, char **argv)
         ctx.icap = sizeof(is_wire_hdr) +
                    (size_t)IS_MAX_BATCH * (sizeof(is_wire_page_hdr) + ps);
         ctx.ibuf = malloc(ctx.icap);
+        ctx.merge_buf = malloc((size_t)IS_MAX_BATCH * ps);
         ctx.prefetch_k = prefetch;
         ctx.k_cur = prefetch ? prefetch : 1;
         if (!ctx.state || !ctx.ring_tag || !ctx.ring_valid ||
-            !ctx.ring_buf || !ctx.ibuf)
+            !ctx.ring_buf || !ctx.ibuf || !ctx.merge_buf)
             is_die("restorer", "alloc(daemon structures)", ENOMEM);
 
         is_set_nonblock(sock); /* handshake was blocking; hot path is not */
@@ -675,6 +752,7 @@ int main(int argc, char **argv)
                   (hydrate_secs > 0 ? hydrate_secs : 1e-9);
     long hits = ctx.st_cache_hits, net = ctx.st_net_served;
     long pref = ctx.st_prefetch_issued, bat = ctx.st_batches;
+    long mruns = ctx.st_merge_runs, mpages = ctx.st_merged_pages;
 
     if (!eager) {
         uint64_t one = 1;
@@ -703,6 +781,8 @@ int main(int argc, char **argv)
         printf("  faults served from network : %ld\n", net);
         printf("  served from prefetch cache : %ld  (RTT eliminated)\n",
                hits);
+        printf("  speculative merged installs: %ld pages in %ld runs"
+               " (single-syscall hydration)\n", mpages, mruns);
         printf("  prefetched requests issued : %ld in %ld batches\n",
                pref, bat);
         print_hist(ctx.hist);
@@ -711,8 +791,9 @@ int main(int argc, char **argv)
 
     /* Machine-readable summary for demo.sh comparisons */
     printf("SUMMARY mode=%s activate_ms=%.3f ready_ms=%.3f total_ms=%.3f"
-           " pages=%u net=%ld hits=%ld hydrate_mbps=%.1f\n",
+           " pages=%u net=%ld hits=%ld merged=%ld merge_runs=%ld"
+           " hydrate_mbps=%.1f\n",
            eager ? "eager" : "lazy", activation_ms, swept_ms, total_ms,
-           np, net, hits, mbps);
+           np, net, hits, mpages, mruns, mbps);
     return 0;
 }
