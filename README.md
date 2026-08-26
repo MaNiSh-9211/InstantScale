@@ -30,6 +30,92 @@ service pays). Nothing is slept away.
 Reproduce: `powershell -File hotpod.ps1 p3` (battery) — every run prints
 `RESULT` lines and matching CRC digests on both sides.
 
+## How it works — from the problem to the mechanism
+
+### The problem
+
+In Kubernetes/serverless environments, when traffic spikes, the autoscaler
+adds replicas. But a new replica is a **newborn process** — it must rebuild
+its entire world from zero: load datasets, rebuild caches, warm connection
+pools, JIT-compile hot code. For a JVM service that's **5–40 seconds** of
+dead time per pod, during exactly the moment you're having a traffic
+emergency. *The problem isn't starting a process — it's that a new process
+has no warm state.*
+
+### Existing solutions, and why each falls short
+
+| Solution | What it does | Why it's not enough |
+|---|---|---|
+| Cold start (HPA default) | New pods boot from scratch | 5–40 s dead time |
+| AOT (GraalVM / Quarkus) | Native compile → boot ~10–100 ms | Fixes *boot*, not *state*: pools/caches still empty. Full rebuild per release, reflection limits, peak throughput can trail JIT |
+| Eager snapshot migration | Copy the whole memory image before starting | Right idea — but startup blocks on moving **gigabytes** |
+| Warm pools | Pre-launch idle pods | Guessing capacity; still pays state-load; idle cost |
+
+Everyone either makes the newborn faster, or pays full freight to move
+memory upfront. Nobody decouples **"start serving"** from **"have all
+memory"**.
+
+### The insight
+
+A process doesn't need its memory to **start** — it needs each page only at
+the **moment it first touches it**. So: start the new instance with **zero
+memory**, serve immediately, and pull each 4 KB page from the old host only
+when — and only if — it's actually touched. Demand paging over the network:
+the same trick the OS uses for swap and mmap, but the "disk" is the old host
+and the payload is your warm state.
+
+### The mechanism
+
+**Source host** — the warm instance snapshots itself (`SIGUSR2`) into an
+image: `[header | heap pages | tail {sequence, uptime}]`. A pageserver
+(epoll TCP daemon) serves 4 KB pages from it on request.
+
+**Target host** — the new replica:
+
+1. Maps **32 MB of empty memory** and registers it with
+   **`userfaultfd(2)`** in `MISSING` mode: *"kernel, pause any thread that
+   touches a not-present page here and tell me."*
+2. **Starts serving** — ~0.3 ms after launch, having moved ~100 bytes.
+3. First touch of a missing page → the kernel **freezes that exact thread**
+   (no signal, no crash) and queues an event. The PF-daemon — an epoll loop
+   over the userfaultfd and socket — fetches the 4 KB page over TCP and
+   installs it with **`ioctl(UFFDIO_COPY)`**, atomically mapping it and
+   waking the sleeper. The app's load simply… completes.
+
+Three inventions on top of vanilla userfaultfd:
+
+1. **Adaptive prefetch** — touching page N silently requests N+1..N+K
+   (K auto-tunes 1→32 from hit-rate). ~97 % of pages never wait on the wire.
+2. **Speculative run-merging** — consecutive fetched pages install with one
+   ranged `UFFDIO_COPY` (~31 pages/syscall). Hydration: 107 → 439 MB/s.
+3. **Self-healing state machine** — every failure path (evicted prefetch,
+   duplicate response, partial write) resolves by re-request or park; no
+   deadlock by construction (20× stress harness).
+
+**Integrity:** rolling CRC32 over every page, computed at checkpoint and
+re-verified after full hydration — byte-identical, every run. Plus sequence
+continuity (`seq N → N+1`): the replica *resumed its life*; it did not
+reboot.
+
+### vs the alternatives, one line each
+
+- **vs cold start:** the rebuild already happened — off the critical path.
+- **vs AOT:** AOT makes the newborn faster; HotPod doesn't birth anything.
+  Runtime-agnostic, no rebuilds, works on unmodified JIT-hot JVMs.
+- **vs eager migration:** they block startup on gigabytes; we block on
+  kilobytes and stream the rest behind live traffic.
+
+### Honest limitations
+
+- Transport: authenticated (PSK + HMAC-SHA256) plaintext TCP — run on
+  private networks; TLS on the roadmap.
+- Cross-region activation ≈ one RTT (~50 ms), and first-touch bursts are
+  RTT-bound there.
+- CRIU bridge for *arbitrary third-party* processes is CI-verified but
+  young; first-party lifecycle apps are GA.
+- Checkpoints are immutable per session (live dirty-page re-sync is
+  future work).
+
 ## System architecture
 
 ```mermaid
