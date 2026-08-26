@@ -15,11 +15,11 @@ until grep -q "^READY" "$HB"; do sleep 0.05; done
 until grep -q "^HB seq=2" "$HB"; do sleep 0.02; done
 PRE=$(awk '$1=="HB"{split($2,a,"=");s=a[2]}END{print s+0}' "$HB")
 
-$CR page-server --images $W/ps --address 127.0.0.1 \
+timeout -k 5 60 $CR page-server --images $W/ps --address 127.0.0.1 \
      --port 46333 --daemon --pidfile $W/ps.pid \
      -o $W/ps.log -v1 || echo "[dbg] page-server rc=$?"
 
-$CR dump -D $W/dump --lazy-pages \
+timeout -k 5 180 $CR dump -D $W/dump --lazy-pages \
      --page-server --address 127.0.0.1 --port 46333 \
      -t $APP --shell-job -o $W/dump.log -v1 &
 DJ=$!
@@ -28,7 +28,7 @@ for _ in $(seq 300); do
     sleep 0.1
 done
 
-$CR restore --lazy-pages --page-server \
+timeout -k 5 180 $CR restore --lazy-pages --page-server \
      --address 127.0.0.1 --port 46333 --images $W/ps \
      --shell-job -d --pidfile $W/r.pid \
      -o $W/res.log -v1 || echo "[dbg] restore rc=$?"
