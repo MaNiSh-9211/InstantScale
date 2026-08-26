@@ -80,65 +80,68 @@ jobs:
       - name: CRIU lazy-pages roundtrip
         run: |
           CR=/tmp/criu-src/criu/criu
-          # Lazy-pages needs privileged mode; runner root has CAP_SYS_ADMIN.
-          # (setcap/unprivileged variant above stays for eager flows.)
-          HB=/tmp/lhb.log; : >"$HB"
-          ./phase3/demo_app --init-ms 300 --warm-mb 8 >>"$HB" 2>&1 &
-          APP=$!
-          until grep -q '^READY' "$HB"; do sleep 0.05; done
-          sleep 0.4
-          PRE=$(awk '$1=="HB"{split($2,a,"=");s=a[2]}END{print s+0}' "$HB")
+          # Entire lazy flow runs as ONE root shell: consistent ownership of
+          # pidfiles/logs (mixing sudo/root and runner files caused flaky
+          # permission failures and stale verdicts).
+          sudo bash -s -- <<'LAZY'
+            set -uo pipefail
+            CR=/tmp/criu-src/criu/criu
+            W=/tmp/lazy
+            rm -rf "$W"; mkdir -p "$W/ps" "$W/dump"
+            HB=$W/hb.log; : > "$HB"
 
-          mkdir -p /tmp/lps /tmp/ldump
-          timeout 60 sudo "$CR" page-server --images /tmp/lps --address 127.0.0.1 \
-               --port 46333 --daemon --pidfile /tmp/lps.pid \
-               -o /tmp/lps.log -v1 || echo "[dbg] page-server rc=$?"
-          timeout 180 sudo "$CR" dump -D /tmp/ldump --lazy-pages \
-               --page-server --address 127.0.0.1 --port 46333 \
-               -t $APP --shell-job                -o /tmp/ldump.log -v1 &
-          DJ=$!
+            /src/phase3/demo_app --init-work-mb 64 --warm-mb 16 \
+                --interval-ms 50 --hb-count 40 >> "$HB" 2>&1 &
+            APP=$!
+            until grep -q "^READY" "$HB"; do sleep 0.05; done
+            until grep -q "^HB seq=2" "$HB"; do sleep 0.02; done
+            PRE=$(awk '$1=="HB"{split($2,a,"=");s=a[2]}END{print s+0}' "$HB")
 
-          # Race guard: restore must not start before the dump has shipped
-          # its metadata images to the page-server's storage.
-          for _ in $(seq 300); do
-              [ -f /tmp/lps/pstree.img ] && break
-              sleep 0.1
-          done
+            $CR page-server --images $W/ps --address 127.0.0.1 \
+                 --port 46333 --daemon --pidfile $W/ps.pid \
+                 -o $W/ps.log -v1 || echo "[dbg] page-server rc=$?"
 
-          timeout 180 sudo "$CR" restore --lazy-pages --page-server \
-               --address 127.0.0.1 --port 46333 --images /tmp/lps \
-               --shell-job -d --pidfile /tmp/lr.pid \
-               -o /tmp/lres.log -v1 || echo "[dbg] restore rc=$?"
-          wait $DJ 2>/dev/null || true
+            $CR dump -D $W/dump --lazy-pages \
+                 --page-server --address 127.0.0.1 --port 46333 \
+                 -t $APP --shell-job -o $W/dump.log -v1 &
+            DJ=$!
+            for _ in $(seq 300); do
+                [ -f $W/ps/pstree.img ] && break
+                sleep 0.1
+            done
 
-          sleep 1.5
-          # shared heartbeat file: LAST seq belongs to the restored process
-          POST=$(awk '$1=="HB"{split($2,a,"=");s=a[2]}END{print s+0}' "$HB")
-          kill "$(cat /tmp/lr.pid)" 2>/dev/null || true
-          sudo kill "$(cat /tmp/lps.pid)" 2>/dev/null || true
+            $CR restore --lazy-pages --page-server \
+                 --address 127.0.0.1 --port 46333 --images $W/ps \
+                 --shell-job -d --pidfile $W/r.pid \
+                 -o $W/res.log -v1 || echo "[dbg] restore rc=$?"
+            wait $DJ 2>/dev/null || true
 
-          echo "lazy pre_seq=$PRE post_seq=$POST"
-          mkdir -p criu-lazy-logs
-          for f in /tmp/lres.log /tmp/ldump.log /tmp/lps.log "$HB"; do
-              [ -f "$f" ] && cp "$f" criu-lazy-logs/
-          done
-          echo "--- lres.log tail ---";   tail -n 10 /tmp/lres.log 2>/dev/null || true
-          echo "--- ldump.log tail ---";  tail -n 10 /tmp/ldump.log 2>/dev/null || true
-          {
-            echo "### CRIU lazy-pages"
-            echo '```'
-            echo "pre_seq=$PRE post_seq=$POST"
-            grep -hE "Error|Warn" /tmp/lres.log /tmp/ldump.log | tail -n 8
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          if [ -n "$POST" ] && [ "$POST" -gt "$PRE" ]; then
-            echo "CRIU LAZY PAGES OK"
-            exit 0
-          fi
-          echo "CRIU LAZY PAGES: continuity not observed"
-          exit 1
+            sleep 2
+            POST=$(awk '$1=="HB"{split($2,a,"=");s=a[2]}END{print s+0}' "$HB")
+            kill $(cat $W/r.pid 2>/dev/null) 2>/dev/null || true
+            kill $(cat $W/ps.pid 2>/dev/null) 2>/dev/null || true
+
+            echo "lazy pre_seq=$PRE post_seq=$POST"
+            echo "--- res.log tail ---"; tail -n 8 $W/res.log 2>/dev/null || true
+            echo "--- dump.log tail ---"; tail -n 8 $W/dump.log 2>/dev/null || true
+            mkdir -p /tmp/lazy-logs
+            cp $W/*.log "$HB" /tmp/lazy-logs/ 2>/dev/null || true
+
+            if [ -n "$POST" ] && [ "$POST" -gt "$PRE" ]; then
+                echo "CRIU LAZY PAGES OK"
+                exit 0
+            fi
+            echo "CRIU LAZY PAGES: continuity not observed"
+            exit 1
+LAZY
 
       - name: Upload lazy-pages diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: criu-lazy-logs
+          path: /tmp/lazy-logs/
+          if-no-files-found: ignore      - name: Upload lazy-pages diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
