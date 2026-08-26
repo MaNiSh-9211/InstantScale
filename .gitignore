@@ -38,3 +38,9 @@ phase2/restorer
 artifacts/
 phase3/demo_app
 phase3/analyze
+
+# --- security: local env & deps ---
+.env
+.env.*
+!*.env.example
+node_modules/
