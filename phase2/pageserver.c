@@ -1,4 +1,4 @@
-﻿/*
+/*
  * HotPod â€” pageserver.c
  * The SOURCE-HOST side of the wire: holds the checkpoint image (mmap'd,
  * zero extra copies beyond one memcpy per served page) and streams 4 KB
@@ -17,6 +17,7 @@
  *   and target virtual layouts can differ freely.
  */
 #include "common.h"
+#include <pthread.h>
 
 /* Per-connection state --------------------------------------------------- */
 typedef struct conn_s {
@@ -40,7 +41,9 @@ static size_t g_img_len;
 static const is_img_hdr *g_hdr;
 static const uint8_t *g_pages;       /* first page byte inside the map        */
 static uint64_t g_conns_served, g_pages_served, g_bytes_served;
+static uint64_t g_zero_served, g_auth_fail;
 static char   *g_token;             /* PSK; NULL = open mode (dev only)      */
+static const uint8_t *g_flags;      /* v2 images: 1 byte per page (zero=1)   */
 static volatile sig_atomic_t g_stop = 0;
 static long    g_live_conns;
 static const long MAX_CLIENTS = 256;
@@ -131,6 +134,17 @@ static void handle_pages_req(conn_t *c, uint32_t count, const uint8_t *offs_raw)
             sbuf_put(c, &ph, sizeof(ph));
             continue;
         }
+        /* Zero-page elision: flagged pages ship with no payload; the
+         * restorer installs them with UFFDIO_ZEROPAGE (kernel maps the
+         * shared zero page — no copy, no memory). */
+        if (g_hdr->version >= 2 && g_flags && g_flags[off / g_hdr->page_size]) {
+            ph.status = IS_PAGE_ZERO;
+            ph.data_len = 0;
+            sbuf_put(c, &ph, sizeof(ph));
+            ++g_zero_served;
+            continue;
+        }
+
         const uint8_t *src = g_pages + off;
         sbuf_put(c, &ph, sizeof(ph));
         sbuf_put(c, src, g_hdr->page_size);
@@ -159,6 +173,7 @@ static void process_recv(conn_t *c)
         /* PSK gate: with a token configured, the FIRST frame must be AUTH
          * and everything else is rejected with the standard marker. */
         if (g_token && !c->authed && h.type != IS_REQ_AUTH) {
+            ++g_auth_fail;
             fprintf(stderr, "[pageserver] unauthenticated frame (type %u)"
                             " — rejecting\n", h.type);
             is_wire_hdr rj = { .magic = IS_WIRE_MAGIC,
@@ -209,6 +224,7 @@ static void process_recv(conn_t *c)
             } else {
                 /* Signal rejection cleanly so clients report "token
                  * rejected" instead of a raw connection reset. */
+                ++g_auth_fail;
                 is_wire_hdr rh = { .magic = IS_WIRE_MAGIC,
                                    .type = IS_RSP_AUTH, .count = 0 };
                 sbuf_put(c, &rh, sizeof(rh));
@@ -280,6 +296,93 @@ static bool flush_conn(conn_t *c)
     return true;
 }
 
+
+/* ------------------------------------------------------------------ */
+/* Prometheus text-exposition endpoint (optional, --metrics-port P).   */
+/* Minimal HTTP/1.1 server on a detached thread; counters are read     */
+/* with __atomic so the epoll loop needs no locks.                     */
+/* ------------------------------------------------------------------ */
+
+static void metrics_serve_conn(int cfd)
+{
+    char req[512];
+    size_t got = 0;
+    while (got < sizeof(req) - 1) {
+        ssize_t n = recv(cfd, req + got, 1, 0);
+        if (n <= 0) { close(cfd); return; }
+        if (req[got] == '\n') break; /* end of request line is enough */
+        ++got;
+    }
+    req[got] = '\0';
+
+    uint64_t pages   = __atomic_load_n(&g_pages_served, __ATOMIC_RELAXED);
+    uint64_t zero    = __atomic_load_n(&g_zero_served,  __ATOMIC_RELAXED);
+    uint64_t bytes   = __atomic_load_n(&g_bytes_served, __ATOMIC_RELAXED);
+    uint64_t conns   = __atomic_load_n(&g_conns_served, __ATOMIC_RELAXED);
+    uint64_t afail   = __atomic_load_n(&g_auth_fail,    __ATOMIC_RELAXED);
+    long     live    = g_live_conns;
+
+    char body[1024];
+    int bl = snprintf(body, sizeof(body),
+        "# HELP hotpod_pages_served_total data pages served.\n"
+        "# TYPE hotpod_pages_served_total counter\n"
+        "hotpod_pages_served_total %" PRIu64 "\n"
+        "# HELP hotpod_zeropages_served_total zero pages elided.\n"
+        "# TYPE hotpod_zeropages_served_total counter\n"
+        "hotpod_zeropages_served_total %" PRIu64 "\n"
+        "# HELP hotpod_bytes_served_total payload bytes served.\n"
+        "# TYPE hotpod_bytes_served_total counter\n"
+        "hotpod_bytes_served_total %" PRIu64 "\n"
+        "# HELP hotpod_connections_total accepted client connections.\n"
+        "# TYPE hotpod_connections_total counter\n"
+        "hotpod_connections_total %" PRIu64 "\n"
+        "# HELP hotpod_live_connections currently open connections.\n"
+        "# TYPE hotpod_live_connections gauge\n"
+        "hotpod_live_connections %ld\n"
+        "# HELP hotpod_auth_failures_total rejected auth attempts.\n"
+        "# TYPE hotpod_auth_failures_total counter\n"
+        "hotpod_auth_failures_total %" PRIu64 "\n",
+        pages, zero, bytes, conns, live, afail);
+
+    char hdr[128];
+    int hl = snprintf(hdr, sizeof(hdr),
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\n"
+        "Content-Length: %d\r\nConnection: close\r\n\r\n", bl);
+    send(cfd, hdr, (size_t)hl, MSG_NOSIGNAL);
+    send(cfd, body, (size_t)bl, MSG_NOSIGNAL);
+    close(cfd);
+}
+
+static void *metrics_main(void *arg)
+{
+    int port = (int)(intptr_t)arg;
+    int lfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (lfd == -1)
+        return NULL;
+    int one = 1;
+    setsockopt(lfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    struct sockaddr_in a = {
+        .sin_family = AF_INET,
+        .sin_addr.s_addr = htonl(INADDR_ANY),
+        .sin_port = htons((uint16_t)port),
+    };
+    if (bind(lfd, (struct sockaddr *)&a, sizeof(a)) == -1 ||
+        listen(lfd, 16) == -1) {
+        fprintf(stderr, "[metrics] cannot bind :%d — metrics disabled\n",
+                port);
+        close(lfd);
+        return NULL;
+    }
+    printf("[%-9s] metrics on 0.0.0.0:%d/metrics\n", "pageserver", port);
+    for (;;) {
+        int cfd = accept(lfd, NULL, NULL);
+        if (cfd == -1)
+            continue;
+        metrics_serve_conn(cfd);
+    }
+    return NULL;
+}
+
 int main(int argc, char **argv)
 {
     signal(SIGPIPE, SIG_IGN); /* dead peers must not kill the daemon */
@@ -290,6 +393,7 @@ int main(int argc, char **argv)
     uint16_t port = IS_DEFAULT_PORT;
     const char *img_path = NULL;
     const char *token_file = NULL;
+    int metrics_port = 0;
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--port") && i + 1 < argc)
             port = (uint16_t)strtoul(argv[++i], NULL, 10);
@@ -297,6 +401,8 @@ int main(int argc, char **argv)
             img_path = argv[++i];
         else if (!strcmp(argv[i], "--token-file") && i + 1 < argc)
             token_file = argv[++i];
+        else if (!strcmp(argv[i], "--metrics-port") && i + 1 < argc)
+            metrics_port = atoi(argv[++i]);
     }
     g_token = token_file ? is_read_token_file(token_file) : NULL;
     if (!g_token)
@@ -325,9 +431,14 @@ int main(int argc, char **argv)
     close(ifd);
 
     g_hdr = g_img;
-    if (g_hdr->magic != IS_IMG_MAGIC || g_hdr->version != IS_IMG_VER)
+    if (g_hdr->magic != IS_IMG_MAGIC ||
+        (g_hdr->version != 1 && g_hdr->version != IS_IMG_VER))
         is_die("pageserver", "image magic/version", EINVAL);
     g_pages = (const uint8_t *)g_img + sizeof(is_img_hdr);
+    /* v2 images carry one zero-flag byte per page after the page data. */
+    g_flags = (g_hdr->version >= 2)
+                ? (const uint8_t *)g_img + is_flags_offset(g_hdr)
+                : NULL;
 
     printf("[%-9s] serving %-22s %u pages (%.1f MB) digest=0x%08" PRIx32 "\n",
            "pageserver", g_hdr->svc_name, g_hdr->num_pages,
@@ -335,6 +446,13 @@ int main(int argc, char **argv)
            (uint32_t)g_hdr->digest);
     printf("[%-9s] listening on 0.0.0.0:%u (auth=%s)\n",
            "pageserver", port, g_token ? "PSK/HMAC" : "OPEN");
+
+    if (metrics_port > 0) {
+        pthread_t mt;
+        if (pthread_create(&mt, NULL, metrics_main,
+                           (void *)(intptr_t)metrics_port) == 0)
+            pthread_detach(mt);
+    }
 
     g_epfd = epoll_create1(EPOLL_CLOEXEC);
     if (g_epfd == -1)

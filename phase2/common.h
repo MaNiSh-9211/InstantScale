@@ -1,5 +1,5 @@
-﻿/*
- * HotPod â€” common.h
+/*
+ * HotPod ??? common.h
  * Shared definitions for the Phase 2 split-process prototype:
  *   seeder     -> builds the "checkpointed warm heap" image on disk
  *   pageserver -> TCP server streaming 4 KB pages out of that image
@@ -10,12 +10,12 @@
  * --------------------------------------------------------------------------
  * Every frame starts with wire_hdr {magic,type,count,pad}.
  *   C->S  META_REQ    count=0                      -> S->C META_RESP + wire_meta
- *   C->S  PAGES_REQ   count=N + N Ã— wire_off       -> S->C PAGES_RESP(count=N)
- *                                                       + N Ã— (wire_page_hdr + data)
+ *   C->S  PAGES_REQ   count=N + N ?? wire_off       -> S->C PAGES_RESP(count=N)
+ *                                                       + N ?? (wire_page_hdr + data)
  *   C->S  BYE         count=0                      -> server closes
  *
  * Pages are addressed by OFFSET within the logical region, never by absolute
- * virtual address â€” source and target ASLR layouts are free to differ, which
+ * virtual address ??? source and target ASLR layouts are free to differ, which
  * is exactly the situation after a real CRIU restore on another host.
  */
 #ifndef IS_COMMON_H
@@ -27,7 +27,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <arpa/inet.h>         /* inet_pton */
-#include <netdb.h>             /* getaddrinfo â€” resolve hostnames */
+#include <netdb.h>             /* getaddrinfo ??? resolve hostnames */
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <signal.h>            /* SIGPIPE disposition */
@@ -71,14 +71,15 @@ enum {
 /* Status codes carried per page in PAGES_RESP. */
 enum {
     IS_PAGE_OK   = 0,
-    IS_PAGE_OOB  = 1,      /* offset beyond region â€” protocol violation  */
+    IS_PAGE_OOB  = 1,      /* offset beyond region ? protocol violation  */
+    IS_PAGE_ZERO = 2,      /* all-zero page: install via UFFDIO_ZEROPAGE */
 };
 
 #define IS_MAX_BATCH     64u   /* hard cap on pages per request frame     */
 
 /* On-disk checkpoint image ("warm heap snapshot") ------------------------ */
-#define IS_IMG_MAGIC     0x4953494Du        /* "ISIM" HotPod IMage */
-#define IS_IMG_VER       1u
+#define IS_IMG_MAGIC     0x4953494Du        /* "ISIM" InstantScale IMage */
+#define IS_IMG_VER       2u   /* v2: per-page zero-flags after page data */
 
 typedef struct {
     uint32_t magic;        /* IS_IMG_MAGIC                               */
@@ -160,7 +161,7 @@ static inline void is_log(const char *tag, const char *fmt, ...)
 }
 
 /* ------------------------------------------------------------------ */
-/* CRC32 (IEEE, reflected) â€” table built once per process              */
+/* CRC32 (IEEE, reflected) ??? table built once per process              */
 /* Used for end-to-end integrity: seeder computes it over all page     */
 /* bytes in index order; restorer recomputes after hydration. Equal    */
 /* values prove every bit survived the wire.                           */
@@ -295,7 +296,7 @@ static inline void is_recv_exact(int fd, void *buf, size_t len)
     }
 }
 
-/* Same, but EOF is reported as 0 instead of dying — lets auth distinguish
+/* Same, but EOF is reported as 0 instead of dying ? lets auth distinguish
  * "server said no" from transport faults. */
 static inline size_t is_recv_exact_or_eof(int fd, void *buf, size_t len)
 {
@@ -316,7 +317,7 @@ static inline size_t is_recv_exact_or_eof(int fd, void *buf, size_t len)
 }
 
 /* ------------------------------------------------------------------ */
-/* SHA-256 + HMAC (FIPS 180-4 / RFC 2104) — dependency-free, used for  */
+/* SHA-256 + HMAC (FIPS 180-4 / RFC 2104) ? dependency-free, used for  */
 /* production PSK authentication of migration sessions.                */
 /* ------------------------------------------------------------------ */
 
@@ -523,7 +524,7 @@ static inline void is_auth_hmac(const char *token, uint64_t nonce,
 }
 
 /* Client side: perform the exchange on a blocking socket. Fatal on any
- * mismatch — a wrong token must never silently proceed. */
+ * mismatch ? a wrong token must never silently proceed. */
 static inline void is_client_auth(int fd, const char *token)
 {
     uint64_t nc = is_rand64();
@@ -566,6 +567,36 @@ static inline int is_server_verify_auth(const char *token,
     uint8_t expect[32];
     is_auth_hmac(token, nc, "C", expect);
     return is_ct_memcmp(expect, payload + IS_AUTH_NONCE, 32) ? EACCES : 0;
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Zero-page elision (v2 images): real heaps are 30-60% zero pages.    */
+/* Zero pages travel as a status flag (no 4KB payload) and install     */
+/* with UFFDIO_ZEROPAGE - bandwidth and memory both win.               */
+/* ------------------------------------------------------------------ */
+
+static inline size_t is_flags_offset(const is_img_hdr *h)
+{
+    return sizeof(is_img_hdr) + h->region_len; /* np bytes, one per page */
+}
+
+/* Install `len` bytes of ZERO pages at `dst` (dst must be page-aligned).
+ * Returns 0 on success, -1 with errno set on hard failure. */
+static inline int is_uffdio_zeropage(int uffd, uint64_t dst, size_t len)
+{
+    struct uffdio_zeropage z;
+    memset(&z, 0, sizeof(z));
+    z.range.start = dst;
+    z.range.len = len;
+    for (;;) {
+        if (ioctl(uffd, UFFDIO_ZEROPAGE, &z) == -1) {
+            if (errno == EAGAIN || errno == EINTR)
+                continue;
+            return -1;
+        }
+        return 0;
+    }
 }
 
 #endif /* IS_COMMON_H */

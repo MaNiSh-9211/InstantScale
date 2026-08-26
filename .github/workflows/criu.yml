@@ -1,4 +1,4 @@
-﻿name: criu-native
+name: criu-native
 
 on:
   push:
@@ -77,8 +77,7 @@ jobs:
           echo "pre_seq=$PRE post_seq=$POST"
           [ -n "$POST" ] && [ "$POST" -gt "$PRE" ] && echo "CRIU MIGRATION CONTINUITY OK"
 
-      - name: CRIU lazy-pages roundtrip (experimental)
-        continue-on-error: true
+      - name: CRIU lazy-pages roundtrip
         run: |
           CR=/tmp/criu-src/criu/criu
           # Lazy-pages needs privileged mode; runner root has CAP_SYS_ADMIN.

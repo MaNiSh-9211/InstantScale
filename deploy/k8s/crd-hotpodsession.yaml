@@ -1,0 +1,55 @@
+# HotPodSession CRD (v1alpha1 — controller roadmap: docs/ROADMAP.md Phase 4)
+# Declares the intent; the future operator reconciles pageserver
+# Deployments, checkpoint PVCs, and fan-out policy from this object.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: hotpodsessions.hotpod.io
+spec:
+  group: hotpod.io
+  scope: Namespaced
+  names:
+    plural: hotpodsessions
+    singular: hotpodsession
+    kind: HotPodSession
+    shortNames: ["hps"]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [checkpointRef]
+              properties:
+                checkpointRef:
+                  type: object
+                  required: [pvcName]
+                  properties:
+                    pvcName:   { type: string }
+                    imagePath: { type: string, default: "/data/app.isim" }
+                tokenSecretRef:
+                  type: string
+                pageserverPort: { type: integer, default: 46100 }
+                warmPolicy:
+                  type: object
+                  properties:
+                    maxFanout:    { type: integer, default: 10 }
+                    prefetchK:    { type: integer, default: 4 }
+                    metricsPort:  { type: integer, default: 46101 }
+                placement:
+                  type: object
+                  properties:
+                    sameZoneAsSource: { type: boolean, default: true }
+            status:
+              type: object
+              properties:
+                phase: { type: string }
+                pageserverEndpoint: { type: string }
+                replicasServing: { type: integer }
+                lastCheckpointMs: { type: number }
+      subresources:
+        status: {}

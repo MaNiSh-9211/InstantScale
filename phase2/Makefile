@@ -10,7 +10,7 @@ seeder: seeder.c common.h
 	$(CC) $(CFLAGS) -o $@ $<
 
 pageserver: pageserver.c common.h
-	$(CC) $(CFLAGS) -o $@ $<
+	$(CC) $(CFLAGS) -pthread -o $@ $<
 
 restorer: restorer.c common.h
 	$(CC) $(CFLAGS) -pthread -o $@ $<

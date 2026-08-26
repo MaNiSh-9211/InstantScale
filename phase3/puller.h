@@ -128,43 +128,68 @@ static void pp_process(pp_ctx *c)
         if (h.magic != IS_WIRE_MAGIC || h.type != IS_RSP_PAGES ||
             h.count > PP_MAX_BATCH)
             is_die("puller", "bad response", EPROTO);
-        size_t need = sizeof(h) +
-                      (size_t)h.count * (sizeof(is_wire_page_hdr) + c->ps);
-        if (c->ilen < need)
-            return;
 
-        uint8_t *p = c->ibuf + sizeof(h);
-        for (uint32_t i = 0; i < h.count; ++i) {
+        /* Incremental walk: zero pages carry no payload, so frame length
+         * is only known entry-by-entry. */
+        uint32_t n = 0;
+        size_t pos = sizeof(h);
+        static __thread uint64_t       p_idx[PP_MAX_BATCH];
+        static __thread uint8_t        p_zero[PP_MAX_BATCH];
+        static __thread const uint8_t *p_dat[PP_MAX_BATCH];
+        while (n < h.count) {
+            if (c->ilen < pos + sizeof(is_wire_page_hdr))
+                return;
             is_wire_page_hdr ph;
-            memcpy(&ph, p, sizeof(ph));
-            p += sizeof(ph);
-            const uint8_t *data = p;
-            p += ph.status == IS_PAGE_OK ? c->ps : 0;
-            if (ph.status != IS_PAGE_OK)
+            memcpy(&ph, c->ibuf + pos, sizeof(ph));
+            if (ph.status != IS_PAGE_OK && ph.status != IS_PAGE_ZERO)
                 is_die("puller", "server page error", EPROTO);
+            size_t el = sizeof(ph) +
+                        (ph.status == IS_PAGE_OK ? c->ps : 0);
+            if (c->ilen < pos + el)
+                return;
+            if (ph.offset % c->ps != 0 ||
+                ph.offset >= (uint64_t)c->np * c->ps)
+                is_die("puller", "offset out of range", EPROTO);
+            p_idx[n]  = ph.offset / c->ps;
+            p_zero[n] = (ph.status == IS_PAGE_ZERO);
+            p_dat[n]  = c->ibuf + pos + sizeof(ph);
+            ++n;
+            pos += el;
+        }
 
-            uint64_t idx = ph.offset / c->ps;
+        for (uint32_t i = 0; i < n; ++i) {
+            uint64_t idx = p_idx[i];
+            uint64_t dst = (uint64_t)(uintptr_t)(c->base + idx * c->ps);
 
             /* Is an application thread actually blocked on this page? */
             long found = -1;
             for (unsigned j = 0; j < c->npend; ++j)
                 if (c->pend[j].idx == idx) { found = (long)j; break; }
 
-            if (found >= 0) {
-                uint64_t dst = c->pend[found].aligned_addr;
+            if (p_zero[i]) {
+                /* Zero page: UFFDIO_ZEROPAGE — no payload anywhere. */
+                if (is_uffdio_zeropage(c->uffd, dst, c->ps) == -1 &&
+                    errno != EEXIST)
+                    is_die("puller", "UFFDIO_ZEROPAGE", errno);
+                if (found >= 0) {
+                    c->pend[found] = c->pend[--c->npend];
+                }
+                c->state[idx] = 2;
+            } else if (found >= 0) {
+                uint64_t wdst = c->pend[found].aligned_addr;
                 c->pend[found] = c->pend[--c->npend]; /* swap-remove */
-                pp_inject(c, dst, data);              /* wakes sleeper  */
+                pp_inject(c, wdst, p_dat[i]);         /* wakes sleeper  */
                 c->state[idx] = 2;
             } else {
                 /* Prefetch landing: park into tagged slot for later. */
                 unsigned s = c->next_slot++ % PP_SLOTS;
                 c->tag[s]   = idx;
                 c->valid[s] = true;
-                memcpy(c->slotbuf + (size_t)s * c->ps, data, c->ps);
+                memcpy(c->slotbuf + (size_t)s * c->ps, p_dat[i], c->ps);
             }
         }
-        memmove(c->ibuf, c->ibuf + need, c->ilen - need);
-        c->ilen -= need;
+        memmove(c->ibuf, c->ibuf + pos, c->ilen - pos);
+        c->ilen -= pos;
     }
 }
 

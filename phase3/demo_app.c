@@ -70,11 +70,18 @@ static const char *arg_str(int argc, char **argv, const char *key)
     return NULL;
 }
 
-/* Fill pages: word0 = SENTINEL^idx (O(1) live verification), body PRNG. */
+/* Every 3rd page stays all-zero — real JVM heaps are 30-60% zeros, and
+ * this exercises zero-page elision (UFFDIO_ZEROPAGE) end-to-end. */
+static inline int is_zero_page(size_t pi) { return (pi % 3) == 0; }
+
+/* Fill pages: word0 = SENTINEL^idx (O(1) live verification), body PRNG.
+ * Zero pages (every 3rd) stay zero — probe expects word0 == 0 there. */
 static void fill_heap(uint8_t *heap, size_t npages, size_t ps)
 {
     for (size_t pi = 0; pi < npages; ++pi) {
         uint8_t *page = heap + pi * ps;
+        if (is_zero_page(pi))
+            continue; /* already zero from MAP_ANONYMOUS */
         *(uint64_t *)page = SENTINEL ^ (uint64_t)pi;
         uint64_t s2 = 0x9E3779B97F4A7C15ull ^ ((uint64_t)pi << 1);
         for (size_t b = sizeof(uint64_t); b < ps; b += sizeof(uint64_t)) {
@@ -84,7 +91,7 @@ static void fill_heap(uint8_t *heap, size_t npages, size_t ps)
     }
 }
 
-/* Write [hdr][pages][tail] in one pass; returns wall milliseconds spent. */
+/* Write [hdr][pages][zero-flags][tail] (ISIM v2); returns wall ms spent. */
 static double write_checkpoint(const char *path, const uint8_t *heap,
                                size_t npages, size_t ps, uint64_t seq,
                                double uptime_ms)
@@ -107,8 +114,14 @@ static double write_checkpoint(const char *path, const uint8_t *heap,
     if (fd == -1)
         is_die("ckpt", "open(image)", errno);
     if (write(fd, &hdr, sizeof(hdr)) != (ssize_t)sizeof(hdr) ||
-        write(fd, heap, npages * ps) != (ssize_t)(npages * ps) ||
-        write(fd, &tail, sizeof(tail)) != (ssize_t)sizeof(tail))
+        write(fd, heap, npages * ps) != (ssize_t)(npages * ps))
+        is_die("ckpt", "write(image)", errno);
+    for (size_t pi = 0; pi < npages; ++pi) {
+        uint8_t fl = is_zero_page(pi) ? 1 : 0;
+        if (write(fd, &fl, 1) != 1)
+            is_die("ckpt", "write(flags)", errno);
+    }
+    if (write(fd, &tail, sizeof(tail)) != (ssize_t)sizeof(tail))
         is_die("ckpt", "write(image)", errno);
     fsync(fd);
     close(fd);
@@ -301,8 +314,9 @@ int main(int argc, char **argv)
         }
 
         ++seq;
-        size_t pi = (size_t)((seq * 7919) % npages);
-        if (*(uint64_t *)(heap + pi * ps) != (SENTINEL ^ (uint64_t)pi)) {
+        size_t pi = (size_t)((seq * 7919) % npages); /* pseudo-random probe */
+        uint64_t expect = is_zero_page(pi) ? 0 : (SENTINEL ^ (uint64_t)pi);
+        if (*(uint64_t *)(heap + pi * ps) != expect) {
             fprintf(stderr, "CORRUPTION at page %zu\n", pi);
             return 2;
         }

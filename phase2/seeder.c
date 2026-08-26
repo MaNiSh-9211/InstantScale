@@ -1,4 +1,4 @@
-﻿/*
+/*
  * HotPod â€” seeder.c
  * Builds the "checkpointed warm heap": a deterministic image file that plays
  * the role of a CRIU memory dump taken from a pre-warmed service on Host A.
@@ -24,6 +24,7 @@ int main(int argc, char **argv)
     }
     const char *path = argv[1];
     uint32_t num_pages = (argc > 2) ? (uint32_t)strtoul(argv[2], NULL, 10) : 4096;
+    uint32_t zero_every = (argc > 3) ? (uint32_t)strtoul(argv[3], NULL, 10) : 0;
     if (num_pages == 0)
         is_die("seeder", "num_pages parse", EINVAL);
 
@@ -34,7 +35,8 @@ int main(int argc, char **argv)
 
     /* Build the entire image in memory first: lets us compute the CRC in one
      * pass and write() the file in one shot. For real multi-GB heaps this
-     * streams page-by-page instead â€” same math, chunked. */
+     * streams page-by-page instead — same math, chunked.
+     * v2 layout: [hdr][pages][zero-flags np bytes]. */
     is_img_hdr hdr;
     memset(&hdr, 0, sizeof(hdr));
     hdr.magic = IS_IMG_MAGIC;
@@ -44,18 +46,30 @@ int main(int argc, char **argv)
     hdr.region_len = region_len;
     snprintf(hdr.svc_name, sizeof(hdr.svc_name), "payments-jvm-warm");
 
-    uint8_t *img = malloc(sizeof(hdr) + region_len);
+    uint8_t *img = malloc(sizeof(hdr) + region_len + num_pages);
     if (!img)
         is_die("seeder", "malloc(image)", ENOMEM);
     memcpy(img, &hdr, sizeof(hdr));
+    uint8_t *flags = img + sizeof(hdr) + region_len;
+    memset(flags, 0, num_pages);
 
     double t0 = is_now_ms();
     uint32_t crc = 0;
     for (uint32_t i = 0; i < num_pages; ++i) {
         uint8_t *page = img + sizeof(hdr) + (size_t)i * ps;
 
+        /* --zero-every N: every Nth page is left fully zero and flagged —
+         * models the 30-60% zero pages real JVM heaps contain and lets the
+         * pipeline exercise UFFDIO_ZEROPAGE elision. */
+        if (zero_every && i % zero_every == 0) {
+            memset(page, 0, ps);
+            flags[i] = 1;
+            crc = is_crc_update(crc, page, ps);
+            continue;
+        }
+
         /* Sentinel word proves per-page addressing correctness across the
-         * wire â€” if offsets ever skew, sentinels mismatch immediately. */
+         * wire — if offsets ever skew, sentinels mismatch immediately. */
         *(uint64_t *)page = (uint64_t)i + 1;
 
         /* Deterministic pseudo-heap: every byte varies, nothing compressible,
@@ -74,7 +88,7 @@ int main(int argc, char **argv)
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd == -1)
         is_die("seeder", "open(image)", errno);
-    size_t total = sizeof(hdr) + region_len;
+size_t total = sizeof(hdr) + region_len + num_pages; /* + zero flags */
     if (write(fd, img, total) != (ssize_t)total)
         is_die("seeder", "write(image)", errno);
     if (fsync(fd) == -1)

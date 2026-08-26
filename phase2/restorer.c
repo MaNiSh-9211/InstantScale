@@ -1,4 +1,4 @@
-﻿/*
+/*
  * HotPod â€” restorer.c
  * The TARGET-HOST side: activates a "restored" process instantly by mapping an
  * EMPTY memory region, arming userfaultfd(MISSING), and pulling every page
@@ -90,6 +90,7 @@ typedef struct {
 
     /* statistics (daemon writes; main reads after join) */
     long  st_net_served, st_cache_hits, st_prefetch_issued, st_batches;
+    long  st_zeropages;           /* pages installed via UFFDIO_ZEROPAGE  */
     long  hist[9];                /* fault-service latency buckets        */
 
     /* adaptive prefetch lookahead */
@@ -234,6 +235,7 @@ static void process_responses(rctx_t *c)
 {
     static __thread uint64_t       r_idx[IS_MAX_BATCH];
     static __thread const uint8_t *r_dat[IS_MAX_BATCH];
+    static __thread uint8_t        r_zero[IS_MAX_BATCH];
 
     for (;;) {
         if (c->ilen < sizeof(is_wire_hdr))
@@ -244,29 +246,30 @@ static void process_responses(rctx_t *c)
             h.count > IS_MAX_BATCH)
             is_die("daemon", "bad response header", EPROTO);
 
-        size_t need = sizeof(h) +
-                      (size_t)h.count * (sizeof(is_wire_page_hdr) + c->ps);
-        if (c->ilen < need)
-            return; /* wait for the rest */
-
-        /* Stage this frame's pages (validated). */
+        /* Walk the frame incrementally: zero pages carry NO payload, so the
+         * total length is only known entry-by-entry (a fixed computation
+         * would wait forever on bytes the server never sends). */
         uint32_t n = 0;
-        uint8_t *p = c->ibuf + sizeof(h);
-        for (uint32_t i = 0; i < h.count; ++i) {
+        size_t pos = sizeof(h);
+        while (n < h.count) {
+            if (c->ilen < pos + sizeof(is_wire_page_hdr))
+                return; /* need more bytes */
             is_wire_page_hdr ph;
-            memcpy(&ph, p, sizeof(ph));
-            p += sizeof(ph);
-            const uint8_t *data = p;
-            p += ph.status == IS_PAGE_OK ? c->ps : 0;
-
-            if (ph.status != IS_PAGE_OK)
+            memcpy(&ph, c->ibuf + pos, sizeof(ph));
+            if (ph.status != IS_PAGE_OK && ph.status != IS_PAGE_ZERO)
                 is_die("daemon", "server reported page error", EPROTO);
             if (ph.offset % c->ps != 0 ||
                 ph.offset >= (uint64_t)c->np * c->ps)
                 is_die("daemon", "response offset out of range", EPROTO);
+            size_t el = sizeof(ph) +
+                        (ph.status == IS_PAGE_OK ? c->ps : 0);
+            if (c->ilen < pos + el)
+                return; /* payload split across recvs */
             r_idx[n] = ph.offset / c->ps;
-            r_dat[n] = data;
+            r_dat[n] = c->ibuf + pos + sizeof(ph);
+            r_zero[n] = (ph.status == IS_PAGE_ZERO);
             ++n;
+            pos += el;
         }
         /* r_dat[] points into ibuf; consumption happens only AFTER the
          * installs below have copied everything out. */
@@ -283,25 +286,56 @@ static void process_responses(rctx_t *c)
                 w = pend_find(c, r_idx[k]);
 
             if (w < 0) {
-                /* Pure-prefetch run: park every page in the ring. */
-                for (uint32_t k = i; k <= j; ++k)
-                    ring_put(c, r_idx[k], r_dat[k]);
+                /* Pure-prefetch run: zero pages install instantly
+                 * (UFFDIO_ZEROPAGE needs no fault); data pages park. */
+                for (uint32_t k = i; k <= j; ++k) {
+                    if (r_zero[k]) {
+                        uint64_t d =
+                            (uint64_t)(uintptr_t)(c->base + r_idx[k] * c->ps);
+                        if (is_uffdio_zeropage(c->uffd, d, c->ps) == -1 &&
+                            errno != EEXIST)
+                            is_die("daemon", "UFFDIO_ZEROPAGE", errno);
+                        c->state[r_idx[k]] = ST_LOCAL;
+                        ++c->st_zeropages;
+                    } else {
+                        ring_put(c, r_idx[k], r_dat[k]);
+                    }
+                }
                 i = j + 1;
                 continue;
             }
 
             uint64_t dst0 = (uint64_t)(uintptr_t)(c->base + r_idx[i] * c->ps);
+            (void)dst0;
 
-            if (j > i) { /* MERGED speculative install */
-                size_t bytes = (size_t)(j - i + 1) * c->ps;
-                for (uint32_t k = i; k <= j; ++k)
-                    memcpy(c->merge_buf + (size_t)(k - i) * c->ps,
-                           r_dat[k], c->ps);
-                inject_range(c, dst0, c->merge_buf, bytes);
-                ++c->st_merge_runs;
-                c->st_merged_pages += (long)(j - i + 1);
-            } else {
-                inject_range(c, dst0, r_dat[i], c->ps);
+            /* Install the run in kind-homogeneous sub-runs: contiguous DATA
+             * pages merge into one ranged COPY; contiguous ZERO pages merge
+             * into one ranged UFFDIO_ZEROPAGE (no payload, no memory). */
+            uint32_t k = i;
+            while (k <= j) {
+                uint8_t zk = r_zero[k];
+                uint32_t e = k;
+                while (e + 1 <= j && r_zero[e + 1] == zk)
+                    ++e;
+
+                uint64_t d = (uint64_t)(uintptr_t)(c->base + r_idx[k] * c->ps);
+                size_t bytes = (size_t)(e - k + 1) * c->ps;
+                if (zk) {
+                    if (is_uffdio_zeropage(c->uffd, d, bytes) == -1 &&
+                        errno != EEXIST)
+                        is_die("daemon", "UFFDIO_ZEROPAGE", errno);
+                    c->st_zeropages += (long)(e - k + 1);
+                } else if (e > k) {
+                    for (uint32_t q = k; q <= e; ++q)
+                        memcpy(c->merge_buf + (size_t)(q - k) * c->ps,
+                               r_dat[q], c->ps);
+                    inject_range(c, d, c->merge_buf, bytes);
+                    ++c->st_merge_runs;
+                    c->st_merged_pages += (long)(e - k + 1);
+                } else {
+                    inject_range(c, d, r_dat[k], c->ps);
+                }
+                k = e + 1;
             }
 
             /* Resolve waiters + mark the whole run present. Speculatively
@@ -329,9 +363,9 @@ static void process_responses(rctx_t *c)
             i = j + 1;
         }
 
-        /* All installs copied out of ibuf â€” safe to consume the frame now. */
-        memmove(c->ibuf, c->ibuf + need, c->ilen - need);
-        c->ilen -= need;
+        /* All installs copied out of ibuf — safe to consume the frame now. */
+        memmove(c->ibuf, c->ibuf + pos, c->ilen - pos);
+        c->ilen -= pos;
     }
 }
 
@@ -777,6 +811,7 @@ int main(int argc, char **argv)
     long hits = ctx.st_cache_hits, net = ctx.st_net_served;
     long pref = ctx.st_prefetch_issued, bat = ctx.st_batches;
     long mruns = ctx.st_merge_runs, mpages = ctx.st_merged_pages;
+    long zpages = ctx.st_zeropages;
 
     if (!eager) {
         uint64_t one = 1;
@@ -807,6 +842,8 @@ int main(int argc, char **argv)
                hits);
         printf("  speculative merged installs: %ld pages in %ld runs"
                " (single-syscall hydration)\n", mpages, mruns);
+        printf("  zero pages elided           : %ld  (UFFDIO_ZEROPAGE,"
+               " no payload)\n", zpages);
         printf("  prefetched requests issued : %ld in %ld batches\n",
                pref, bat);
         print_hist(ctx.hist);
@@ -815,9 +852,9 @@ int main(int argc, char **argv)
 
     /* Machine-readable summary for demo.sh comparisons */
     printf("SUMMARY mode=%s activate_ms=%.3f ready_ms=%.3f total_ms=%.3f"
-           " pages=%u net=%ld hits=%ld merged=%ld merge_runs=%ld"
+           " pages=%u net=%ld hits=%ld merged=%ld merge_runs=%ld zeros=%ld"
            " hydrate_mbps=%.1f\n",
            eager ? "eager" : "lazy", activation_ms, swept_ms, total_ms,
-           np, net, hits, mpages, mruns, mbps);
+           np, net, hits, mpages, mruns, zpages, mbps);
     return 0;
 }
