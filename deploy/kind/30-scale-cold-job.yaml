@@ -1,0 +1,25 @@
+# NORMAL AUTOSCALING: N fresh pods, each pays the FULL cold start
+# (real work: 256 MB load + CRC verify + heap warm-up) before serving.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cold-scale
+  namespace: hotpod-demo
+spec:
+  completions: 5
+  parallelism: 5
+  backoffLimit: 0
+  template:
+    metadata:
+      labels: { mode: cold }
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: cold
+          image: hotpod:test
+          securityContext: { privileged: true }
+          command: ["/usr/local/bin/demo_app",
+                    "--init-work-mb", "256",
+                    "--warm-mb", "64",
+                    "--interval-ms", "50",
+                    "--hb-count", "8"]

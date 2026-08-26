@@ -1,0 +1,43 @@
+# Pageserver: streams the checkpoint's pages to any resuming pod.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hotpod-pageserver
+  namespace: hotpod-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: hotpod-pageserver }
+  template:
+    metadata:
+      labels: { app: hotpod-pageserver }
+    spec:
+      restartPolicy: Always
+      containers:
+        - name: pageserver
+          image: hotpod:test
+          securityContext: { privileged: true }
+          args: ["pageserver", "--port", "46100", "--image", "/data/app.isim"]
+          env:
+            - name: HOTPOD_TOKEN
+              valueFrom:
+                secretKeyRef: { name: hotpod-token, key: HOTPOD_TOKEN }
+          ports: [{ containerPort: 46100 }]
+          volumeMounts:
+            - { name: checkpoint, mountPath: /data, readOnly: true }
+          readinessProbe:
+            tcpSocket: { port: 46100 }
+            initialDelaySeconds: 1
+            periodSeconds: 2
+      volumes:
+        - name: checkpoint
+          persistentVolumeClaim: { claimName: checkpoint }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hotpod-pageserver
+  namespace: hotpod-demo
+spec:
+  selector: { app: hotpod-pageserver }
+  ports: [{ port: 46100, targetPort: 46100 }]

@@ -1,0 +1,36 @@
+# HOTPOD AUTOSCALING: N pods resume the SAME warm checkpoint lazily.
+# 0% of heap present at first instruction; pages stream from pageserver.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hot-scale
+  namespace: hotpod-demo
+spec:
+  completions: 5
+  parallelism: 5
+  backoffLimit: 0
+  template:
+    metadata:
+      labels: { mode: hot }
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: hot
+          image: hotpod:test
+          securityContext:
+            privileged: true
+            runAsUser: 0
+          command: ["/usr/local/bin/demo_app",
+                    "--resume-lazy-img", "/data/app.isim",
+                    "--host", "hotpod-pageserver", "--port", "46100",
+                    "--interval-ms", "50",
+                    "--hb-count", "8"]
+          env:
+            - name: HOTPOD_TOKEN
+              valueFrom:
+                secretKeyRef: { name: hotpod-token, key: HOTPOD_TOKEN }
+          volumeMounts:
+            - { name: checkpoint, mountPath: /data, readOnly: true }
+      volumes:
+        - name: checkpoint
+          persistentVolumeClaim: { claimName: checkpoint }

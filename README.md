@@ -135,6 +135,15 @@ Container name `hotpod-src`, network `hotpod-net` (see
 | [DOCKER.md](DOCKER.md) | every build/run/log command, both shells |
 | [CHANGELOG.md](CHANGELOG.md) | reverse-chronological, ADR-referenced |
 
+
+## Test on your own Kubernetes (kind)
+
+```powershell
+docker build -f deploy/Dockerfile -t hotpod:test .
+& "$env:USERPROFILE\tools\kind.exe" load docker-image hotpod:test --name hotpod
+bash deploy/kind/test.sh        # N=5 replicas A/B: cold vs lazy, self-measured
+```
+
 ## License
 
 MIT â€” see [LICENSE](LICENSE).

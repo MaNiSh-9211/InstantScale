@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: lsdebug
+  namespace: hotpod-demo
+spec:
+  restartPolicy: Never
+  containers:
+    - name: ls
+      image: busybox
+      command: ["sh", "-c", "ls -la /data; id; echo done"]
+      volumeMounts:
+        - { name: checkpoint, mountPath: /data }
+  volumes:
+    - name: checkpoint
+      persistentVolumeClaim: { claimName: checkpoint }

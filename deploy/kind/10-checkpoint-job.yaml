@@ -1,0 +1,37 @@
+# Producer: boot a warm instance, let it serve a few beats, SIGUSR2 ->
+# checkpoint to the shared PVC, exit. This is the ONE-TIME warm cost.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: checkpoint-producer
+  namespace: hotpod-demo
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: producer
+          image: hotpod:test
+          securityContext: { privileged: true }
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -e
+              demo_app --init-work-mb 256 --warm-mb 64 --interval-ms 50 \
+                       --hb-count 6 --ckpt-path /data/app.isim \
+                       > /data/producer.log 2>&1 &
+              APP=$!
+              until grep -q '^READY' /data/producer.log; do sleep 0.05; done
+              # kill the moment beat 2 proves the loop is live — a fixed
+              # sleep races hb-count and SIGUSR2 lands on a dead process
+              until grep -q '^HB seq=2' /data/producer.log; do sleep 0.02; done
+              kill -USR2 $APP
+              wait $APP || true
+              echo "--- producer.log ---"
+              cat /data/producer.log
+          volumeMounts:
+            - { name: checkpoint, mountPath: /data }
+      volumes:
+        - name: checkpoint
+          persistentVolumeClaim: { claimName: checkpoint }

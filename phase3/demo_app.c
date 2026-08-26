@@ -131,7 +131,9 @@ int main(int argc, char **argv)
     const char *resume     = arg_str(argc, argv, "--resume");
     const char *rlazy_img  = arg_str(argc, argv, "--resume-lazy-img");
     const char *host       = arg_str(argc, argv, "--host");
-    const char *ckpt       = arg_str(argc, argv, "--ckpt");
+    const char *ckpt = arg_str(argc, argv, "--ckpt-path");
+    if (!ckpt)
+        ckpt = arg_str(argc, argv, "--ckpt"); /* legacy alias */
     if (!ckpt)
         ckpt = "/tmp/demo_app.isim";
 
@@ -279,6 +281,8 @@ int main(int argc, char **argv)
         printf("READY pid=%d pages=%zu digest=0x%08x\n", getpid(), npages,
                is_crc_update(0, heap, npages * ps));
     /* ------------------------------ steady state ---------------------- */
+    unsigned long hb_target = arg_ul(argc, argv, "--hb-count", 0);
+    unsigned long beats = 0;
     while (!g_stop) {
         struct timespec iv = { .tv_sec = (time_t)(interval / 1000),
                                .tv_nsec = (long)(interval % 1000) * 1000000L };
@@ -305,6 +309,13 @@ int main(int argc, char **argv)
         printf("HB seq=%llu pid=%d uptime_ms=%.0f\n",
                (unsigned long long)seq, getpid(),
                now_ms() - t_start + born_shift_ms);
+        if (beats == 0) /* serving-readiness: process start -> first HB */
+            printf("FIRST_HB after_start=%.3f ms\n", now_ms() - t_start);
+        ++beats;
+        /* Yield to a pending snapshot before honoring hb-count exit —
+         * otherwise a SIGUSR2 arriving during the final sleep is lost. */
+        if (hb_target && beats >= hb_target && !g_snapshot)
+            g_stop = 1; /* clean exit for batch/Job environments */
     }
 
     /* Full integrity sweep before exit (also proves ALL lazy pages arrived).*/
