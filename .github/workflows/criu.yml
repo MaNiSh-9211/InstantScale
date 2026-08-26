@@ -97,8 +97,3 @@ jobs:
           name: criu-lazy-logs
           path: criu-lazy-logs/
           if-no-files-found: ignore
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: criu-lazy-logs
-          path: /tmp/lazy-logs/
