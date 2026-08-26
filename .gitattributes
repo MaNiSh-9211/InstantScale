@@ -1,0 +1,4 @@
+*.sh text eol=lf
+*.yaml text eol=lf
+*.c text eol=lf
+*.h text eol=lf
